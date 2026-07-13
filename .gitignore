@@ -1,8 +1,2 @@
 build/
-*.exe
-*.EXE
 *.o
-*.obj
-*.OBJ
-*.com
-*.COM
