@@ -1,2 +1,5 @@
 build/
 *.o
+/BUILD.BAT
+/MAIN.EXE
+/MAIN.OBJ

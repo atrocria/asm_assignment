@@ -20,7 +20,7 @@ or DOSBox-X on modern 64-bit Windows.
 The script assembles `src\main.asm` and writes the DOS executable to:
 
 ```text
-build\main.exe
+main.exe
 ```
 
 If DOSBox is installed but not on `PATH`, pass its location:
@@ -34,13 +34,13 @@ If DOSBox is installed but not on `PATH`, pass its location:
 Run the built program inside DOSBox:
 
 ```powershell
-dosbox-x -c "mount c .\build" -c "c:" -c "main.exe"
+dosbox-x -c "mount c ." -c "c:" -c "main.exe"
 ```
 
 Expected output:
 
 ```text
-Hello, World!
+Press a key:
 ```
 
 ## Source
@@ -49,12 +49,12 @@ The source is in `src\main.asm`.
 
 ## Manual MASM commands
 
-If you are already inside DOSBox in the `SRC` folder, assemble the `.asm` file,
+If you are already inside DOSBox at the project root, assemble the `.asm` file,
 then link the `.obj` file:
 
 ```dos
-..\MASM main.asm;
-..\LINK main.obj;
+MASM src\main.asm,main.obj;
+LINK main.obj;
 main.exe
 ```
 
