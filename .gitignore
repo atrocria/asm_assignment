@@ -1,5 +1,8 @@
 build/
 *.o
 /BUILD.BAT
+/BUILD.LOG
+/BUILD.OK
+/BUILD.FAIL
 /MAIN.EXE
-/MAIN.OBJ
+/*.OBJ

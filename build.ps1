@@ -1,48 +1,68 @@
-```powershell
 param(
     [string]$Output = "main.exe",
-    [string]$DosBox = ""
+    [string]$DosBox = "",
+    [switch]$KeepOpenOnError,
+    [switch]$NoRun
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$scriptPath = $MyInvocation.MyCommand.Path
-$scriptDir = Split-Path -Parent $scriptPath
-$projectRoot = (Resolve-Path -LiteralPath $scriptDir).Path
+function New-DosBoxArgumentString {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Commands
+    )
+
+    (($Commands | ForEach-Object {
+        $escapedCommand = $_.Replace('"', '\"')
+        "-c `"$escapedCommand`""
+    }) -join " ")
+}
+
+$projectRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 
 $srcDir = Join-Path $projectRoot "src"
-$sourcePath = Join-Path $srcDir "main.asm"
+$mainSourcePath = Join-Path $srcDir "main.asm"
 
-$outputPath = Join-Path $projectRoot $Output
+if ([System.IO.Path]::IsPathRooted($Output)) {
+    $outputPath = [System.IO.Path]::GetFullPath($Output)
+} else {
+    $outputPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $Output))
+}
+
 $outputDir = Split-Path -Parent $outputPath
-
-$dosWorkDir = $projectRoot
 
 $masmPath = Join-Path $projectRoot "MASM.EXE"
 $linkPath = Join-Path $projectRoot "LINK.EXE"
 
-# Check that MASM exists.
-if (-not (Test-Path $masmPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $masmPath -PathType Leaf)) {
     throw "MASM.EXE was not found in $projectRoot."
 }
 
-# Check that LINK exists.
-if (-not (Test-Path $linkPath -PathType Leaf)) {
+if (-not (Test-Path -LiteralPath $linkPath -PathType Leaf)) {
     throw "LINK.EXE was not found in $projectRoot."
 }
 
-# Check the src folder.
-if (-not (Test-Path $srcDir -PathType Container)) {
+if (-not (Test-Path -LiteralPath $srcDir -PathType Container)) {
     throw "The src folder was not found at $srcDir."
 }
 
-# Check main.asm.
-if (-not (Test-Path $sourcePath -PathType Leaf)) {
-    throw "main.asm was not found at $sourcePath."
+if (-not (Test-Path -LiteralPath $mainSourcePath -PathType Leaf)) {
+    throw "main.asm was not found at $mainSourcePath."
 }
 
-# Find DOSBox or DOSBox-X.
+$mainSource = Get-Item -LiteralPath $mainSourcePath
+$otherSources = Get-ChildItem -LiteralPath $srcDir -Filter "*.asm" -File |
+    Where-Object { $_.FullName -ne $mainSource.FullName -and $_.Length -gt 0 } |
+    Sort-Object Name
+
+$sourceFiles = @($mainSource) + @($otherSources)
+
+if ($sourceFiles.Count -eq 0) {
+    throw "No assembly source files were found in $srcDir."
+}
+
 $dosBoxCandidates = @()
 
 if ($DosBox) {
@@ -61,8 +81,7 @@ if ($env:ProgramFiles) {
     )
 }
 
-$programFilesX86 =
-    [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+$programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
 
 if ($programFilesX86) {
     $dosBoxCandidates += @(
@@ -74,15 +93,19 @@ if ($programFilesX86) {
 $dosBoxPath = $null
 
 foreach ($candidate in $dosBoxCandidates) {
+    if (-not $candidate) {
+        continue
+    }
+
     $command = Get-Command $candidate -ErrorAction SilentlyContinue
 
-    if ($command) {
+    if ($command -and $command.CommandType -eq "Application") {
         $dosBoxPath = $command.Source
         break
     }
 
-    if (Test-Path $candidate -PathType Leaf) {
-        $dosBoxPath = $candidate
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $dosBoxPath = (Resolve-Path -LiteralPath $candidate).Path
         break
     }
 }
@@ -97,47 +120,56 @@ Install DOSBox or DOSBox-X and add it to PATH, or run:
 "@
 }
 
-# Create the output directory if necessary.
-New-Item `
-    -ItemType Directory `
-    -Force `
-    -Path $outputDir |
-    Out-Null
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
-$sourceName = Split-Path -Leaf $sourcePath
+$programName = [System.IO.Path]::GetFileNameWithoutExtension($mainSource.Name)
+$dosOutput = Join-Path $projectRoot "$programName.EXE"
+$batchPath = Join-Path $projectRoot "BUILD.BAT"
+$logPath = Join-Path $projectRoot "BUILD.LOG"
+$okMarkerPath = Join-Path $projectRoot "BUILD.OK"
+$failMarkerPath = Join-Path $projectRoot "BUILD.FAIL"
 
-$programName =
-    [System.IO.Path]::GetFileNameWithoutExtension($sourceName)
+$assemblyCommands = foreach ($sourceFile in $sourceFiles) {
+    $dosSourcePath = $sourceFile.FullName.Substring($projectRoot.Length).TrimStart("\")
+    $objectName = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile.Name) + ".OBJ"
 
-# DOS paths are relative to the mounted project root.
-$dosSourcePath =
-    $sourcePath.Substring($projectRoot.Length).TrimStart("\")
+    "ECHO MASM $dosSourcePath,$objectName; >> BUILD.LOG"
+    "MASM $dosSourcePath,$objectName; >> BUILD.LOG"
+    "IF ERRORLEVEL 1 GOTO ASSEMBLY_FAILED"
+    "ECHO. >> BUILD.LOG"
+}
 
-$dosOutput = Join-Path $dosWorkDir "$programName.EXE"
-$dosObject = Join-Path $dosWorkDir "$programName.OBJ"
-$batchPath = Join-Path $dosWorkDir "BUILD.BAT"
+$objectNames = foreach ($sourceFile in $sourceFiles) {
+    [System.IO.Path]::GetFileNameWithoutExtension($sourceFile.Name) + ".OBJ"
+}
 
-# BUILD.BAT behavior:
-#
-# Success:
-#   EXIT closes DOSBox automatically.
-#
-# Failure:
-#   PAUSE lets you read the error.
-#   The batch file then ends without EXIT, leaving DOSBox open.
+$linkObjects = $objectNames -join "+"
+$failureAction = if ($KeepOpenOnError) {
+    @"
+PAUSE
+GOTO KEEP_OPEN
+"@
+} else {
+    "EXIT"
+}
+
 $buildBatch = @"
 @ECHO OFF
 CLS
+IF EXIST BUILD.LOG DEL BUILD.LOG
+IF EXIST BUILD.OK DEL BUILD.OK
+IF EXIST BUILD.FAIL DEL BUILD.FAIL
 
 ECHO ========================================
 ECHO Building $programName.asm
 ECHO ========================================
 ECHO.
+ECHO Building $programName.asm > BUILD.LOG
+ECHO. >> BUILD.LOG
 
-MASM $dosSourcePath,$programName.OBJ;
-IF ERRORLEVEL 1 GOTO ASSEMBLY_FAILED
-
-LINK $programName.OBJ;
+$($assemblyCommands -join "`r`n")
+ECHO LINK $linkObjects,$programName.EXE; >> BUILD.LOG
+LINK $linkObjects,$programName.EXE; >> BUILD.LOG
 IF ERRORLEVEL 1 GOTO LINK_FAILED
 
 ECHO.
@@ -145,11 +177,13 @@ ECHO ========================================
 ECHO BUILD SUCCESSFUL
 ECHO Created $programName.EXE
 ECHO ========================================
+ECHO OK> BUILD.OK
 
 EXIT
 
 
 :ASSEMBLY_FAILED
+ECHO ASSEMBLY> BUILD.FAIL
 ECHO.
 ECHO ========================================
 ECHO ASSEMBLY FAILED
@@ -158,11 +192,11 @@ ECHO.
 ECHO MASM reported an error.
 ECHO Review the messages above.
 ECHO.
-PAUSE
-GOTO KEEP_OPEN
+$failureAction
 
 
 :LINK_FAILED
+ECHO LINK> BUILD.FAIL
 ECHO.
 ECHO ========================================
 ECHO LINKING FAILED
@@ -171,8 +205,7 @@ ECHO.
 ECHO LINK reported an error.
 ECHO Review the messages above.
 ECHO.
-PAUSE
-GOTO KEEP_OPEN
+$failureAction
 
 
 :KEEP_OPEN
@@ -182,64 +215,59 @@ ECHO Type EXIT when you are finished.
 ECHO.
 "@
 
-$buildBatch |
-    Set-Content `
-        -Path $batchPath `
-        -Encoding ASCII
+$buildBatch | Set-Content -Path $batchPath -Encoding ASCII
 
-# Remove previous build files so an old EXE cannot be mistaken
-# for a successful new build.
-Remove-Item `
-    -Force `
-    -ErrorAction SilentlyContinue `
-    $dosOutput
+Remove-Item -LiteralPath $dosOutput, $logPath, $okMarkerPath, $failMarkerPath -Force -ErrorAction SilentlyContinue
 
-Remove-Item `
-    -Force `
-    -ErrorAction SilentlyContinue `
-    $dosObject
+foreach ($objectName in $objectNames) {
+    $objectPath = Join-Path $projectRoot $objectName
+    Remove-Item -LiteralPath $objectPath -Force -ErrorAction SilentlyContinue
+}
 
-# Do not add:
-#
-#   -c "exit"
-#
-# BUILD.BAT itself exits DOSBox only when the build succeeds.
-$dosBoxArgs = @(
-    "-c", "mount c `"$dosWorkDir`""
-    "-c", "c:"
-    "-c", "call BUILD.BAT"
+$dosBoxCommands = @(
+    "mount c `"$projectRoot`"",
+    "c:",
+    "BUILD.BAT"
 )
 
-$process = Start-Process `
-    -FilePath $dosBoxPath `
-    -ArgumentList $dosBoxArgs `
-    -Wait `
-    -PassThru
+$dosBoxArgs = New-DosBoxArgumentString -Commands $dosBoxCommands
 
-# On an error, this line is reached only after you manually close
-# DOSBox because PowerShell is waiting for the DOSBox process.
-if (-not (Test-Path $dosOutput -PathType Leaf)) {
+if (-not $KeepOpenOnError) {
+    $dosBoxArgs = "$dosBoxArgs -c `"exit`""
+}
+
+$process = Start-Process -FilePath $dosBoxPath -ArgumentList $dosBoxArgs -Wait -PassThru
+
+if (Test-Path -LiteralPath $failMarkerPath -PathType Leaf) {
+    $failedStep = (Get-Content -LiteralPath $failMarkerPath -Raw).Trim()
+    $buildLog = if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+        (Get-Content -LiteralPath $logPath -Raw).Trim()
+    } else {
+        "BUILD.LOG was not created."
+    }
+
+    throw "Build failed during $failedStep. See BUILD.LOG.`n$buildLog"
+}
+
+if (-not (Test-Path -LiteralPath $okMarkerPath -PathType Leaf) -or -not (Test-Path -LiteralPath $dosOutput -PathType Leaf)) {
     throw "Build failed. No executable was created."
 }
 
 if ($dosOutput -ne $outputPath) {
-    Copy-Item `
-        -Force `
-        -Path $dosOutput `
-        -Destination $outputPath
+    Copy-Item -Force -Path $dosOutput -Destination $outputPath
 }
 
 Write-Host "Built $Output"
 
-# Open a new DOSBox window in the output directory after a
-# successful build.
-$runDosBoxArgs = @(
-    "-c", "mount c `"$outputDir`""
-    "-c", "c:"
+if ($NoRun) {
+    return
+}
+
+$runDosBoxCommands = @(
+    "mount c `"$outputDir`"",
+    "c:"
 )
 
-Start-Process `
-    -FilePath $dosBoxPath `
-    -ArgumentList $runDosBoxArgs |
-    Out-Null
-```
+$runDosBoxArgs = New-DosBoxArgumentString -Commands $runDosBoxCommands
+
+Start-Process -FilePath $dosBoxPath -ArgumentList $runDosBoxArgs | Out-Null
