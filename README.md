@@ -13,6 +13,22 @@ or DOSBox-X on modern 64-bit Windows.
 
 ## Build
 
+The recommended Windows command is:
+
+```powershell
+.\build.cmd
+```
+
+You can also double-click `build.cmd` in File Explorer. It automatically uses
+the standard DOSBox 0.74-3 Start Menu installation, builds `main.exe`, and runs
+the program in DOSBox.
+
+This launcher works when Windows PowerShell reports that running scripts is
+disabled. Its execution-policy bypass applies only to the build process and
+does not change the user or computer policy.
+
+You can also run the PowerShell script directly on systems that allow scripts:
+
 ```powershell
 .\build.ps1
 ```
@@ -26,7 +42,13 @@ main.exe
 If DOSBox is installed but not on `PATH`, pass its location:
 
 ```powershell
-.\build.ps1 -DosBox "C:\Program Files\DOSBox-X\dosbox-x.exe"
+.\build.cmd -DosBox "C:\Program Files\DOSBox-X\dosbox-x.exe"
+```
+
+The DOSBox Start Menu folder is also accepted:
+
+```powershell
+.\build.cmd -DosBox "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\DOSBox-0.74-3"
 ```
 
 ## Run

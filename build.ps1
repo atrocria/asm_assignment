@@ -342,7 +342,8 @@ if ($NoRun) {
 
 $runDosBoxCommands = @(
     "mount c `"$outputDir`"",
-    "c:"
+    "c:",
+    "`"$([System.IO.Path]::GetFileName($outputPath))`""
 )
 
 $runDosBoxArgs = New-DosBoxArgumentString -Commands $runDosBoxCommands
