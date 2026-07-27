@@ -20,6 +20,83 @@ function New-DosBoxArgumentString {
     }) -join " ")
 }
 
+function Resolve-DosBoxShortcut {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if ([System.IO.Path]::GetExtension($Path) -ine ".lnk" -or
+        -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $targetPath = $shell.CreateShortcut($Path).TargetPath
+
+        if ($targetPath -and
+            [System.IO.Path]::GetExtension($targetPath) -ieq ".exe" -and
+            (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
+            return (Resolve-Path -LiteralPath $targetPath).Path
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
+}
+
+function Resolve-DosBoxCandidate {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Candidate
+    )
+
+    if (-not $Candidate) {
+        return $null
+    }
+
+    $command = Get-Command $Candidate -ErrorAction SilentlyContinue
+
+    if ($command -and $command.CommandType -eq "Application") {
+        return $command.Source
+    }
+
+    if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+        if ([System.IO.Path]::GetExtension($Candidate) -ieq ".lnk") {
+            return Resolve-DosBoxShortcut -Path $Candidate
+        }
+
+        if ([System.IO.Path]::GetExtension($Candidate) -ieq ".exe") {
+            return (Resolve-Path -LiteralPath $Candidate).Path
+        }
+
+        return $null
+    }
+
+    if (Test-Path -LiteralPath $Candidate -PathType Container) {
+        $executable = Get-ChildItem -LiteralPath $Candidate -Filter "DOSBox*.exe" -File -Recurse |
+            Select-Object -First 1
+
+        if ($executable) {
+            return $executable.FullName
+        }
+
+        $shortcuts = Get-ChildItem -LiteralPath $Candidate -Filter "DOSBox*.lnk" -File -Recurse
+
+        foreach ($shortcut in $shortcuts) {
+            $shortcutTarget = Resolve-DosBoxShortcut -Path $shortcut.FullName
+
+            if ($shortcutTarget) {
+                return $shortcutTarget
+            }
+        }
+    }
+
+    return $null
+}
+
 $projectRoot = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 
 $srcDir = Join-Path $projectRoot "src"
@@ -90,22 +167,20 @@ if ($programFilesX86) {
     )
 }
 
+if ($env:ProgramData) {
+    $dosBoxCandidates += (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\DOSBox-0.74-3")
+}
+
+if ($env:APPDATA) {
+    $dosBoxCandidates += (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\DOSBox-0.74-3")
+}
+
 $dosBoxPath = $null
 
 foreach ($candidate in $dosBoxCandidates) {
-    if (-not $candidate) {
-        continue
-    }
+    $dosBoxPath = Resolve-DosBoxCandidate -Candidate $candidate
 
-    $command = Get-Command $candidate -ErrorAction SilentlyContinue
-
-    if ($command -and $command.CommandType -eq "Application") {
-        $dosBoxPath = $command.Source
-        break
-    }
-
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        $dosBoxPath = (Resolve-Path -LiteralPath $candidate).Path
+    if ($dosBoxPath) {
         break
     }
 }
@@ -117,6 +192,8 @@ DOSBox or DOSBox-X was not found.
 Install DOSBox or DOSBox-X and add it to PATH, or run:
 
 .\build.ps1 -DosBox "C:\path\to\dosbox.exe"
+
+The -DosBox value may also be a DOSBox Start Menu folder or .lnk shortcut.
 "@
 }
 
