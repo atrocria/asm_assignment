@@ -4,6 +4,7 @@
 .data
     title db "Food Delivery System$"
     ; ---------- Stored credentials (hard-coded for demo) ----------
+    ;updated
     stored_user     DB  'admin$'            ; '$' = DOS string terminator
     stored_pass     DB  'pass123$'
 
