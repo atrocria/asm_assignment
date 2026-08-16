@@ -129,12 +129,23 @@ if (-not (Test-Path -LiteralPath $mainSourcePath -PathType Leaf)) {
     throw "main.asm was not found at $mainSourcePath."
 }
 
-$mainSource = Get-Item -LiteralPath $mainSourcePath
-$otherSources = Get-ChildItem -LiteralPath $srcDir -Filter "*.asm" -File |
-    Where-Object { $_.FullName -ne $mainSource.FullName -and $_.Length -gt 0 } |
-    Sort-Object Name
+$moduleSourceNames = @(
+    "login.asm",
+    "tools.asm"
+)
 
-$sourceFiles = @($mainSource) + @($otherSources)
+$mainSource = Get-Item -LiteralPath $mainSourcePath
+$sourceFiles = @($mainSource)
+
+foreach ($moduleSourceName in $moduleSourceNames) {
+    $moduleSourcePath = Join-Path $srcDir $moduleSourceName
+
+    if (-not (Test-Path -LiteralPath $moduleSourcePath -PathType Leaf)) {
+        throw "Required module was not found at $moduleSourcePath."
+    }
+
+    $sourceFiles += Get-Item -LiteralPath $moduleSourcePath
+}
 
 if ($sourceFiles.Count -eq 0) {
     throw "No assembly source files were found in $srcDir."

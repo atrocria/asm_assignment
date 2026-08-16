@@ -67,7 +67,14 @@ Press a key:
 
 ## Source
 
-The source is in `src\main.asm`.
+The executable is assembled from these modules:
+
+- `src\main.asm` — application menu and module dispatch
+- `src\login.asm` — login, registration, credential validation, and logout
+- `src\tools.asm` — shared display and exit routines
+
+`src\report.asm` is a separate standalone program and is deliberately not
+linked into `main.exe`.
 
 ## Manual MASM commands
 
