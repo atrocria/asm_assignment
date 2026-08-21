@@ -2,27 +2,26 @@
 .STACK 100H
 
 .DATA
-
     ; =========================================================
     ; APPLICATION MENU
     ; =========================================================
 
     main_menu_msg   DB 0DH,0AH
-                    DB '========================================',0DH,0AH
-                    DB '          FOOD DELIVERY SYSTEM           ',0DH,0AH
-                    DB '========================================',0DH,0AH
+                    DB '=============================================================',0DH,0AH
+                    DB '     Welcome to DeliGo Food Delivery and Ordering System     ',0DH,0AH
+                    DB '=============================================================',0DH,0AH
                     DB '1. Place Order',0DH,0AH
                     DB '2. View Cart',0DH,0AH
                     DB '3. Order History',0DH,0AH
                     DB '4. Logout',0DH,0AH
                     DB '5. Quit Program',0DH,0AH
-                    DB '========================================',0DH,0AH
+                    DB '=============================================================',0DH,0AH
                     DB 'Choose an option: $'
 
     newline_msg     DB 0DH,0AH,'$'
 
     ; =========================================================
-    ; TEMPORARY MODULE MESSAGES
+    ; !TEMPORARY MODULE MESSAGES
     ; =========================================================
 
     order_msg       DB 0DH,0AH
@@ -88,7 +87,7 @@ MENU_LOOP:
     INT 21H
 
     MOV AH, 01H
-    INT 21H
+    INT 21H"""
 
     CMP AL, '1'
     JE OPT_ORDER
@@ -118,6 +117,7 @@ OPT_CART:
     CALL CartModule
     JMP MENU_LOOP
 
+; should loop history until the user said to quit
 OPT_HISTORY:
     CALL HistoryModule
     JMP MENU_LOOP
@@ -132,7 +132,7 @@ PostLoginMenu ENDP
 
 
 ; =============================================================
-; PLACEHOLDER MODULES
+; !PLACEHOLDER MODULES
 ;
 ; Replace these calls with the completed order/cart/history modules
 ; when those modules expose their public procedures.

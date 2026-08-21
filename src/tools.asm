@@ -12,7 +12,6 @@
 ; - ReadNum
 ; - ExitProgram
 
-PUBLIC PrintLogo
 PUBLIC PrintString
 PUBLIC NewLine
 PUBLIC ClearScreen
@@ -20,27 +19,7 @@ PUBLIC ReadString
 PUBLIC ReadNum
 PUBLIC ExitProgram
 
-.data
-
-logo db 13,10
-     db '========================================',13,10
-     db '       FOOD DELIVERY SYSTEM             ',13,10
-     db '========================================',13,10
-     db 13,10
-     db '$'
-
 .code
-
-PrintLogo PROC NEAR
-    push dx
-
-    lea dx,logo
-    call PrintString
-
-    pop dx
-    ret
-PrintLogo ENDP
-
 
 PrintString PROC NEAR
     ; Input:
