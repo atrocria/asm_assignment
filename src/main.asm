@@ -1,3 +1,4 @@
+; main.asm
 .MODEL SMALL
 .STACK 100H
 
@@ -22,9 +23,9 @@
 
 .CODE
 
-    ; Login module entry points.
+    ; Login module entry points.""
     EXTRN LoginMenu:NEAR
-    EXTRN Logout:NEAR
+    EXTRN Logout:NEAR;
 
     ; Feature module entry points.
     EXTRN OrderModule:NEAR

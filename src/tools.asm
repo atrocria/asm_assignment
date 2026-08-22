@@ -1,18 +1,7 @@
 .model small
-.stack 100h
-
-; tools.asm
-;
-; Procedures:
-; - PrintLogo
-; - PrintString
-; - NewLine
-; - ClearScreen
-; - ReadString
-; - ReadNum
-; - ExitProgram
 
 PUBLIC PrintString
+PUBLIC 
 PUBLIC NewLine
 PUBLIC ClearScreen
 PUBLIC ReadString
@@ -33,6 +22,48 @@ PrintString PROC NEAR
     pop ax
     ret
 PrintString ENDP
+
+
+; ============================================================
+; ReadArrowKey
+;
+; Returns:
+;   AL = 0  → Up
+;   AL = 1  → Down
+;   AL = 2  → Enter
+;   AL = 0FFh → Other key
+; ============================================================
+
+ReadArrowKey PROC
+
+    MOV AH, 00H
+    INT 16H
+
+    CMP AH, 48H
+    JE  key_up
+
+    CMP AH, 50H
+    JE  key_down
+
+    CMP AL, 0DH
+    JE  key_enter
+
+    MOV AL, 0FFH
+    RET
+
+key_up:
+    MOV AL, 0
+    RET
+
+key_down:
+    MOV AL, 1
+    RET
+
+key_enter:
+    MOV AL, 2
+    RET
+
+ReadArrowKey ENDP
 
 
 ReadString PROC NEAR
