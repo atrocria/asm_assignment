@@ -33,7 +33,8 @@ You can also run the PowerShell script directly on systems that allow scripts:
 .\build.ps1
 ```
 
-The script assembles `src\main.asm` and writes the DOS executable to:
+The script assembles `src\main.asm`, automatically links module-style `.asm`
+files from `src`, and writes the DOS executable to:
 
 ```text
 main.exe
@@ -67,14 +68,28 @@ Press a key:
 
 ## Source
 
-The executable is assembled from these modules:
+The executable starts at:
 
-- `src\main.asm` — application menu and module dispatch
-- `src\login.asm` — login, registration, credential validation, and logout
-- `src\tools.asm` — shared display and exit routines
+- `src\main.asm` - application menu and module dispatch
 
-`src\report.asm` is a separate standalone program and is deliberately not
-linked into `main.exe`.
+The build script automatically links non-empty module files in `src`. Files that
+end with an entry point such as `END MAIN` are treated as standalone programs
+and are deliberately not linked into `main.exe`; `src\report.asm` is one of
+those standalone programs.
+
+Discovered sources are staged under `build\dos` with short DOS-safe filenames
+before MASM runs, so module filenames do not need to follow 8.3 naming.
+
+To replace a built-in fallback screen, add a module that exports the matching
+entry point with `PUBLIC`:
+
+```asm
+PUBLIC OrderModule
+```
+
+The recognized feature entry points are `OrderModule`, `CartModule`, and
+`HistoryModule`. If one of those is missing, the build creates a tiny temporary
+stub so the app still links while the module is unfinished.
 
 ## Manual MASM commands
 

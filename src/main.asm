@@ -20,36 +20,16 @@
 
     newline_msg     DB 0DH,0AH,'$'
 
-    ; =========================================================
-    ; !TEMPORARY MODULE MESSAGES
-    ; =========================================================
-
-    order_msg       DB 0DH,0AH
-                    DB '----------------------------------------',0DH,0AH
-                    DB '             PLACE ORDER                ',0DH,0AH
-                    DB '----------------------------------------',0DH,0AH
-                    DB 'Order module is ready.',0DH,0AH
-                    DB 'Press any key to return to Main Menu...$'
-
-    cart_msg        DB 0DH,0AH
-                    DB '----------------------------------------',0DH,0AH
-                    DB '              VIEW CART                 ',0DH,0AH
-                    DB '----------------------------------------',0DH,0AH
-                    DB 'Cart module is ready.',0DH,0AH
-                    DB 'Press any key to return to Main Menu...$'
-
-    history_msg     DB 0DH,0AH
-                    DB '----------------------------------------',0DH,0AH
-                    DB '            ORDER HISTORY               ',0DH,0AH
-                    DB '----------------------------------------',0DH,0AH
-                    DB 'Order history module is ready.',0DH,0AH
-                    DB 'Press any key to return to Main Menu...$'
-
 .CODE
 
     ; Login module entry points.
     EXTRN LoginMenu:NEAR
     EXTRN Logout:NEAR
+
+    ; Feature module entry points.
+    EXTRN OrderModule:NEAR
+    EXTRN CartModule:NEAR
+    EXTRN HistoryModule:NEAR
 
     ; Shared utility module entry points.
     EXTRN ClearScreen:NEAR
@@ -87,7 +67,7 @@ MENU_LOOP:
     INT 21H
 
     MOV AH, 01H
-    INT 21H"""
+    INT 21H
 
     CMP AL, '1'
     JE OPT_ORDER
@@ -130,47 +110,5 @@ OPT_QUIT:
     CALL ExitProgram
 PostLoginMenu ENDP
 
-
-; =============================================================
-; !PLACEHOLDER MODULES
-;
-; Replace these calls with the completed order/cart/history modules
-; when those modules expose their public procedures.
-; =============================================================
-
-OrderModule PROC NEAR
-    CALL ClearScreen
-    LEA DX, order_msg
-    MOV AH, 09H
-    INT 21H
-
-    MOV AH, 08H
-    INT 21H
-    RET
-OrderModule ENDP
-
-
-CartModule PROC NEAR
-    CALL ClearScreen
-    LEA DX, cart_msg
-    MOV AH, 09H
-    INT 21H
-
-    MOV AH, 08H
-    INT 21H
-    RET
-CartModule ENDP
-
-
-HistoryModule PROC NEAR
-    CALL ClearScreen
-    LEA DX, history_msg
-    MOV AH, 09H
-    INT 21H
-
-    MOV AH, 08H
-    INT 21H
-    RET
-HistoryModule ENDP
 
 END main
