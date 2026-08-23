@@ -1,7 +1,6 @@
 .model small
 
 PUBLIC PrintString
-PUBLIC 
 PUBLIC NewLine
 PUBLIC ClearScreen
 PUBLIC ReadString
@@ -36,6 +35,7 @@ PrintString ENDP
 
 ReadArrowKey PROC
 
+    ; listen for bios input and make bios execute
     MOV AH, 00H
     INT 16H
 

@@ -66,6 +66,8 @@ PUBLIC Logout
 
 .CODE
 
+EXTRN ClearScreen:NEAR
+
 ;-------------------------------------------------------------
 ; LOGIN_MENU
 ; Displays the Login / Register / Exit menu.  It returns to main.asm
@@ -112,6 +114,7 @@ LoginMenu ENDP
 ;-------------------------------------------------------------
 DO_LOGIN PROC
 LOGIN_LOOP:
+    CALL ClearScreen
     CALL SHOW_LOGIN_SCREEN
     CALL READ_USERNAME
     CALL READ_PASSWORD
