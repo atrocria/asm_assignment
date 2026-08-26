@@ -95,17 +95,20 @@ OPT_ORDER:
     JMP MENU_LOOP
 
 OPT_CART:
+    CALL ClearScreen
     CALL CartModule
     JMP MENU_LOOP
 
 ; should loop history until the user said to quit
 OPT_HISTORY:
+    CALL ClearScreen
     CALL HistoryModule
     JMP MENU_LOOP
 
 OPT_LOGOUT:
+    CALL ClearScreen
     CALL Logout
-    RET
+    RET"""
 
 OPT_QUIT:
     CALL ExitProgram    ; Calls cleanup/exit

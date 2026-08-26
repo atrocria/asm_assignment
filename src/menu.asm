@@ -26,7 +26,11 @@ EXTRN total_price:WORD
 
 .CODE
 OrderModule PROC NEAR
+EXTRN ClearScreen:NEAR
+
 FOOD_LOOP:
+
+    CALL ClearScreen
     LEA DX, food_menu_msg
     MOV AH, 09H
     INT 21H
