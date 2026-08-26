@@ -107,7 +107,9 @@ OPT_LOGOUT:
     RET
 
 OPT_QUIT:
-    CALL ExitProgram
+    CALL ExitProgram    ; Calls cleanup/exit
+    MOV AX, 4C00H       ; Terminate process completely
+    INT 21H
 PostLoginMenu ENDP
 
 
