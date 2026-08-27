@@ -108,7 +108,7 @@ OPT_HISTORY:
 OPT_LOGOUT:
     CALL ClearScreen
     CALL Logout
-    RET"""
+    RET
 
 OPT_QUIT:
     CALL ExitProgram    ; Calls cleanup/exit

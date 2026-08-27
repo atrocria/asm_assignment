@@ -16,6 +16,7 @@ PUBLIC CartModule
                   DB 'TOTAL PRICE: RM $'
                   
     pause_msg     DB 0DH,0AH,0DH,0AH,'Press any key to return...$',0DH,0AH
+    checkout_prompt DB 0DH,0AH,0DH,0AH,'Checkout now? (Y/N): $'
 
     ; Shared cart state
     qty_burger    DB 0
@@ -26,6 +27,8 @@ PUBLIC CartModule
 
 .CODE
 CartModule PROC NEAR
+EXTRN CheckoutModule:NEAR
+
     LEA DX, cart_header
     MOV AH, 09H
     INT 21H
@@ -66,6 +69,23 @@ CartModule PROC NEAR
     MOV AX, total_price
     CALL PRINT_NUM             ; Print multi-digit number stored in AX
 
+    ; --- Offer to checkout right here ---
+    LEA DX, checkout_prompt
+    MOV AH, 09H
+    INT 21H
+
+    MOV AH, 01H                ; read one key (Y/N)
+    INT 21H
+    AND AL, 0DFH                ; uppercase, so 'y' and 'Y' both work
+    CMP AL, 'Y'
+    JE  GO_CHECKOUT
+    JMP SKIP_CHECKOUT
+
+GO_CHECKOUT:
+    CALL CheckoutModule         ; shows a receipt, saves to history, empties the cart
+    RET
+
+SKIP_CHECKOUT:
     ; Pause
     LEA DX, pause_msg
     MOV AH, 09H
