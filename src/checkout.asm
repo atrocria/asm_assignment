@@ -58,6 +58,8 @@ EXTRN total_price:WORD
 
 .CODE
 
+EXTRN ClearScreen:NEAR
+
 ; =============================================================
 ; CheckoutModule
 ; Confirms the order, copies the cart into order history, then
@@ -74,6 +76,7 @@ CheckoutModule PROC NEAR
     RET
 
 CO_SHOW_RECEIPT:
+    CALL ClearScreen
     LEA DX, checkout_header
     MOV AH, 09H
     INT 21H

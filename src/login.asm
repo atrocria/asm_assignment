@@ -99,6 +99,7 @@ GOTO_LOGIN:
     RET                           ; main.asm now shows the application menu
 
 GOTO_REGISTER:
+    CALL ClearScreen
     CALL REGISTER
     JMP LOGIN_MENU_LOOP
 

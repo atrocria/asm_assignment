@@ -49,6 +49,7 @@ main PROC
     MOV DS, AX
 
 APPLICATION_LOOP:
+    CALL ClearScreen
     CALL LoginMenu                 ; returns only after a valid login
     CALL PostLoginMenu             ; returns when the user logs out
     JMP APPLICATION_LOOP
