@@ -27,10 +27,10 @@ PrintString ENDP
 ; ReadArrowKey
 ;
 ; Returns:
-;   AL = 0  → Up
-;   AL = 1  → Down
-;   AL = 2  → Enter
-;   AL = 0FFh → Other key
+;   AL = 0  -> Up
+;   AL = 1  -> Down
+;   AL = 2  -> Enter
+;   AL = 0FFh -> Other key
 ; ============================================================
 
 ReadArrowKey PROC

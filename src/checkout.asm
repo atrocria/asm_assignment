@@ -4,12 +4,14 @@
 ; Turns the cart from cart.asm into a saved order, and lets the
 ; user look back at everything they've ordered so far.
 ;
-;   CheckoutModule  - called from CartModule (View Cart) after it
-;                     shows the cart. Confirms with the user, saves
-;                     a copy of the cart into order history, then
-;                     empties the cart.
+;   CheckoutModule  - called from CartModule (View Cart) *after* the
+;                     user has already answered "Checkout now? (Y/N)"
+;                     over there. It does not ask again - it just
+;                     saves a copy of the cart into order history,
+;                     then empties the cart.
 ;   HistoryModule   - called from main.asm's "3. Order History".
-;                     Lists every order CheckoutModule has saved.
+;                     Lists every order CheckoutModule has saved,
+;                     then a grand total across all of them.
 
 PUBLIC CheckoutModule, HistoryModule
 
@@ -26,8 +28,6 @@ EXTRN total_price:WORD
                     DB                 '==================================',0DH,0AH,'$'
 
     empty_cart_msg  DB 0DH,0AH,'Your cart is empty - add something first!',0DH,0AH,'$'
-    confirm_msg     DB 0DH,0AH,0DH,0AH,'Confirm this order? (Y/N): $'
-    cancelled_msg   DB 0DH,0AH,'Checkout cancelled - back to your cart.',0DH,0AH,'$'
     history_full_msg DB 0DH,0AH,'(Order history is full, so this order will not be saved there.)',0DH,0AH,'$'
     success_msg     DB 0DH,0AH,'Order placed! Thanks for ordering.',0DH,0AH,'$'
     pause_msg       DB 0DH,0AH,0DH,0AH,'Press any key to continue...$'
@@ -55,6 +55,9 @@ EXTRN total_price:WORD
     history_empty_msg DB 0DH,0AH,'No orders yet - checkout your cart to see it here.',0DH,0AH,'$'
     order_label     DB 0DH,0AH,0DH,0AH,'Order #$'
     separator_msg   DB 0DH,0AH,'----------------------------------',0DH,0AH,'$'
+    grand_total_msg DB 0DH,0AH,'Grand total (all orders): RM $'
+
+    grand_total     DW 0          ; sum of every past order's total, for HistoryModule
 
 .CODE
 
@@ -62,8 +65,9 @@ EXTRN ClearScreen:NEAR
 
 ; =============================================================
 ; CheckoutModule
-; Confirms the order, copies the cart into order history, then
-; clears the cart so the next order starts empty.
+; Copies the cart into order history, then clears the cart so
+; the next order starts empty. The caller (CartModule) is the
+; one that already confirmed "Checkout now? (Y/N)" with the user.
 ; =============================================================
 CheckoutModule PROC NEAR
 
@@ -82,22 +86,6 @@ CO_SHOW_RECEIPT:
     INT 21H
 
     CALL CO_PRINT_ITEMS          ; prints the 4 live cart quantities + total
-
-    LEA DX, confirm_msg
-    MOV AH, 09H
-    INT 21H
-
-    MOV AH, 01H                  ; read one key (Y/N)
-    INT 21H
-    AND AL, 0DFH                 ; uppercase, so 'y' and 'Y' both work
-    CMP AL, 'Y'
-    JE  CO_SAVE_ORDER
-
-    LEA DX, cancelled_msg
-    MOV AH, 09H
-    INT 21H
-    CALL CO_WAIT_KEY
-    RET
 
 CO_SAVE_ORDER:
     MOV AX, history_count
@@ -158,9 +146,12 @@ CheckoutModule ENDP
 
 ; =============================================================
 ; HistoryModule
-; Lists every order CheckoutModule has saved so far, oldest first.
+; Lists every order CheckoutModule has saved so far, oldest first,
+; then a grand total added up across all of them.
 ; =============================================================
 HistoryModule PROC NEAR
+    MOV grand_total, 0           ; reset in case this gets shown more than once
+
     LEA DX, history_header
     MOV AH, 09H
     INT 21H
@@ -191,7 +182,8 @@ HM_LOOP:
     LEA SI, hist_burger
     ADD SI, BX
     MOV AL, [SI]
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0                    ; AL is 0-255, so widen to AX before printing
+    CALL CO_PRINT_NUM
 
     ; --- Nasi Lemak ---
     LEA DX, co_nasi
@@ -200,7 +192,8 @@ HM_LOOP:
     LEA SI, hist_nasi
     ADD SI, BX
     MOV AL, [SI]
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0
+    CALL CO_PRINT_NUM
 
     ; --- Egg Fried Rice ---
     LEA DX, co_rice
@@ -209,7 +202,8 @@ HM_LOOP:
     LEA SI, hist_rice
     ADD SI, BX
     MOV AL, [SI]
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0
+    CALL CO_PRINT_NUM
 
     ; --- Fried Chicken ---
     LEA DX, co_chicken
@@ -218,7 +212,8 @@ HM_LOOP:
     LEA SI, hist_chicken
     ADD SI, BX
     MOV AL, [SI]
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0
+    CALL CO_PRINT_NUM
 
     ; --- Total ---
     LEA DX, co_total
@@ -230,6 +225,7 @@ HM_LOOP:
     ADD SI, DI
     MOV AX, [SI]
     CALL CO_PRINT_NUM
+    ADD grand_total, AX           ; fold this order into the running total
 
     LEA DX, separator_msg
     MOV AH, 09H
@@ -237,13 +233,20 @@ HM_LOOP:
 
     INC BX
     CMP BX, history_count
-    JL  HM_LOOP
+    JGE HM_TOTAL                 ; MASM can't reach HM_LOOP with a short JL from
+    JMP HM_LOOP                  ; here (loop body is too long) - JMP has no such limit
+
+HM_TOTAL:
+    LEA DX, grand_total_msg
+    MOV AH, 09H
+    INT 21H
+    MOV AX, grand_total
+    CALL CO_PRINT_NUM
 
 HM_DONE:
     CALL CO_WAIT_KEY
     RET
 HistoryModule ENDP
-
 
 ; =============================================================
 ; Local helpers - same pattern as cart.asm's own print helpers,
@@ -257,25 +260,29 @@ CO_PRINT_ITEMS PROC NEAR
     MOV AH, 09H
     INT 21H
     MOV AL, qty_burger
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0                    ; AL is 0-255, so widen to AX before printing
+    CALL CO_PRINT_NUM
 
     LEA DX, co_nasi
     MOV AH, 09H
     INT 21H
     MOV AL, qty_nasi
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0
+    CALL CO_PRINT_NUM
 
     LEA DX, co_rice
     MOV AH, 09H
     INT 21H
     MOV AL, qty_rice
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0
+    CALL CO_PRINT_NUM
 
     LEA DX, co_chicken
     MOV AH, 09H
     INT 21H
     MOV AL, qty_chicken
-    CALL CO_PRINT_DIGIT
+    MOV AH, 0
+    CALL CO_PRINT_NUM
 
     LEA DX, co_total
     MOV AH, 09H
@@ -285,16 +292,7 @@ CO_PRINT_ITEMS PROC NEAR
     RET
 CO_PRINT_ITEMS ENDP
 
-; --- Prints AL (0-9) as a single digit character ---
-CO_PRINT_DIGIT PROC NEAR
-    ADD AL, '0'
-    MOV DL, AL
-    MOV AH, 02H
-    INT 21H
-    RET
-CO_PRINT_DIGIT ENDP
-
-; --- Prints AX as a decimal number (works for more than one digit) ---
+; --- Prints AX as a decimal number (any number of digits) ---
 CO_PRINT_NUM PROC NEAR
     PUSH AX
     PUSH BX
