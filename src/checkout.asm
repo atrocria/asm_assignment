@@ -6,9 +6,10 @@
 ;
 ;   CheckoutModule  - called from CartModule (View Cart) *after* the
 ;                     user has already answered "Checkout now? (Y/N)"
-;                     over there. It does not ask again - it just
-;                     saves a copy of the cart into order history,
-;                     then empties the cart.
+;                     over there. It does not ask again - it shows a
+;                     receipt with tax, takes payment (cash or card),
+;                     saves the order into history, then empties the
+;                     cart.
 ;   HistoryModule   - called from main.asm's "3. Order History".
 ;                     Lists every order CheckoutModule has saved,
 ;                     then a grand total across all of them.
@@ -19,18 +20,22 @@ PUBLIC CheckoutModule, HistoryModule
 EXTRN qty_burger:BYTE, qty_nasi:BYTE, qty_rice:BYTE, qty_chicken:BYTE
 EXTRN total_price:WORD
 
+; Shared helpers from tools.asm - no need to reinvent number input.
+EXTRN ReadNum:NEAR, NewLine:NEAR
+
 .DATA
     MAX_HISTORY   EQU 10          ; how many past orders we can remember
+    TAX_PERCENT   EQU 6           ; flat tax rate applied to the subtotal
 
     ; ---------- checkout screen text ----------
     checkout_header DB 0DH,0AH,0DH,0AH,'==================================',0DH,0AH
                     DB                 '             CHECKOUT             ',0DH,0AH
                     DB                 '==================================',0DH,0AH,'$'
 
-    empty_cart_msg  DB 0DH,0AH,'Your cart is empty - add something first!',0DH,0AH,'$'
+    empty_cart_msg   DB 0DH,0AH,'Your cart is empty - add something first!',0DH,0AH,'$'
     history_full_msg DB 0DH,0AH,'(Order history is full, so this order will not be saved there.)',0DH,0AH,'$'
-    success_msg     DB 0DH,0AH,'Order placed! Thanks for ordering.',0DH,0AH,'$'
-    pause_msg       DB 0DH,0AH,0DH,0AH,'Press any key to continue...$'
+    success_msg      DB 0DH,0AH,'Order placed! Thanks for ordering.',0DH,0AH,'$'
+    pause_msg        DB 0DH,0AH,0DH,0AH,'Press any key to continue...$'
 
     ; item lines shared by the checkout receipt and the order history list
     co_burger   DB 0DH,0AH,'Burger x $'
@@ -39,13 +44,36 @@ EXTRN total_price:WORD
     co_chicken  DB 0DH,0AH,'2pcs Fried Chicken x $'
     co_total    DB 0DH,0AH,'Total: RM $'
 
+    ; ---------- receipt: subtotal, tax, amount due ----------
+    subtotal_label   DB 0DH,0AH,'Subtotal: RM $'
+    tax_label        DB 0DH,0AH,'Tax (6%): RM $'
+    total_due_label  DB 0DH,0AH,'Total due: RM $'
+
+    order_tax   DW 0               ; tax on the order being checked out right now
+    order_due   DW 0               ; subtotal + tax = what the customer must pay
+
+    ; ---------- payment ----------
+    payment_menu_msg DB 0DH,0AH,0DH,0AH,'How will you pay?',0DH,0AH
+                     DB '1. Cash',0DH,0AH
+                     DB '2. Card',0DH,0AH
+                     DB 'Choose an option: $'
+    invalid_payment_msg DB 0DH,0AH,'Invalid choice, try again.',0DH,0AH,'$'
+
+    cash_prompt      DB 0DH,0AH,'Enter cash amount (RM): $'
+    change_label     DB 0DH,0AH,'Change: RM $'
+    insufficient_msg DB 0DH,0AH,'That is not enough cash - checkout cancelled.',0DH,0AH,'$'
+    card_approved_msg DB 0DH,0AH,'Card payment approved.',0DH,0AH,'$'
+
+    cash_tendered DW 0             ; cash the customer handed over
+    change_due    DW 0             ; cash_tendered - order_due
+
     ; ---------- order history storage ----------
     ; slot i (0 .. history_count-1) holds one past checkout
     hist_burger   DB MAX_HISTORY DUP(0)
     hist_nasi     DB MAX_HISTORY DUP(0)
     hist_rice     DB MAX_HISTORY DUP(0)
     hist_chicken  DB MAX_HISTORY DUP(0)
-    hist_total    DW MAX_HISTORY DUP(0)
+    hist_total    DW MAX_HISTORY DUP(0)     ; final amount actually paid (tax included)
     history_count DW 0
 
     ; ---------- order history screen text ----------
@@ -65,9 +93,10 @@ EXTRN ClearScreen:NEAR
 
 ; =============================================================
 ; CheckoutModule
-; Copies the cart into order history, then clears the cart so
-; the next order starts empty. The caller (CartModule) is the
-; one that already confirmed "Checkout now? (Y/N)" with the user.
+; Shows a receipt (items, subtotal, tax, total due), takes
+; payment, then copies the order into history and empties the
+; cart. The caller (CartModule) is the one that already confirmed
+; "Checkout now? (Y/N)" with the user.
 ; =============================================================
 CheckoutModule PROC NEAR
 
@@ -85,7 +114,37 @@ CO_SHOW_RECEIPT:
     MOV AH, 09H
     INT 21H
 
-    CALL CO_PRINT_ITEMS          ; prints the 4 live cart quantities + total
+    CALL CO_PRINT_ITEMS          ; prints the 4 live cart quantities
+
+    LEA DX, subtotal_label
+    MOV AH, 09H
+    INT 21H
+    MOV AX, total_price
+    CALL CO_PRINT_NUM
+
+    CALL CO_CALC_TAX             ; fills in order_tax and order_due
+
+    LEA DX, tax_label
+    MOV AH, 09H
+    INT 21H
+    MOV AX, order_tax
+    CALL CO_PRINT_NUM
+
+    LEA DX, total_due_label
+    MOV AH, 09H
+    INT 21H
+    MOV AX, order_due
+    CALL CO_PRINT_NUM
+
+    CALL CO_TAKE_PAYMENT         ; asks Cash/Card, shows change if paying cash
+    CMP AL, 1                    ; AL = 1 if payment went through, 0 if not enough cash
+    JE  CO_SAVE_ORDER
+
+    LEA DX, insufficient_msg
+    MOV AH, 09H
+    INT 21H
+    CALL CO_WAIT_KEY
+    RET
 
 CO_SAVE_ORDER:
     MOV AX, history_count
@@ -124,7 +183,7 @@ CO_STORE:
     SHL DI, 1                    ; hist_total holds WORDs, so index*2
     LEA SI, hist_total
     ADD SI, DI
-    MOV AX, total_price
+    MOV AX, order_due            ; save what was actually charged (tax included)
     MOV [SI], AX
 
     INC history_count
@@ -215,7 +274,7 @@ HM_LOOP:
     MOV AH, 0
     CALL CO_PRINT_NUM
 
-    ; --- Total ---
+    ; --- Total (tax already included, since that is what was charged) ---
     LEA DX, co_total
     MOV AH, 09H
     INT 21H
@@ -254,7 +313,8 @@ HistoryModule ENDP
 ; needs to know they exist.
 ; =============================================================
 
-; --- Prints the 4 live cart quantities + running total ---
+; --- Prints the 4 live cart quantities (no total - CheckoutModule
+;     prints subtotal/tax/total due itself, right after calling this) ---
 CO_PRINT_ITEMS PROC NEAR
     LEA DX, co_burger
     MOV AH, 09H
@@ -283,14 +343,87 @@ CO_PRINT_ITEMS PROC NEAR
     MOV AL, qty_chicken
     MOV AH, 0
     CALL CO_PRINT_NUM
-
-    LEA DX, co_total
-    MOV AH, 09H
-    INT 21H
-    MOV AX, total_price
-    CALL CO_PRINT_NUM
     RET
 CO_PRINT_ITEMS ENDP
+
+; --- Works out tax and total due from the current subtotal
+;     (total_price). Tax is rounded down to the nearest ringgit. ---
+CO_CALC_TAX PROC NEAR
+    PUSH BX
+    PUSH DX
+
+    MOV AX, total_price
+    MOV BX, TAX_PERCENT
+    MUL BX                       ; DX:AX = total_price * TAX_PERCENT
+    MOV BX, 100
+    DIV BX                       ; AX = tax amount
+    MOV order_tax, AX
+
+    MOV AX, total_price
+    ADD AX, order_tax
+    MOV order_due, AX
+
+    POP DX
+    POP BX
+    RET
+CO_CALC_TAX ENDP
+
+; --- Asks Cash or Card and collects payment.
+;     Cash also asks for the amount and shows change.
+;     Returns: AL = 1 if payment went through, AL = 0 if the cash
+;              handed over was not enough (checkout is cancelled). ---
+CO_TAKE_PAYMENT PROC NEAR
+CO_ASK_METHOD:
+    LEA DX, payment_menu_msg
+    MOV AH, 09H
+    INT 21H
+
+    MOV AH, 01H                  ; read one key (1 or 2)
+    INT 21H
+
+    CMP AL, '1'
+    JE  CO_PAY_CASH
+    CMP AL, '2'
+    JE  CO_PAY_CARD
+
+    LEA DX, invalid_payment_msg
+    MOV AH, 09H
+    INT 21H
+    JMP CO_ASK_METHOD
+
+CO_PAY_CARD:
+    LEA DX, card_approved_msg
+    MOV AH, 09H
+    INT 21H
+    MOV AL, 1
+    RET
+
+CO_PAY_CASH:
+    LEA DX, cash_prompt
+    MOV AH, 09H
+    INT 21H
+    CALL ReadNum                 ; AX = cash amount typed in (from tools.asm)
+    CALL NewLine
+    MOV cash_tendered, AX
+
+    CMP AX, order_due
+    JGE CO_CASH_OK
+    MOV AL, 0                    ; not enough cash
+    RET
+
+CO_CASH_OK:
+    SUB AX, order_due
+    MOV change_due, AX
+
+    LEA DX, change_label
+    MOV AH, 09H
+    INT 21H
+    MOV AX, change_due
+    CALL CO_PRINT_NUM
+
+    MOV AL, 1
+    RET
+CO_TAKE_PAYMENT ENDP
 
 ; --- Prints AX as a decimal number (any number of digits) ---
 CO_PRINT_NUM PROC NEAR
