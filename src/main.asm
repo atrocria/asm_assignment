@@ -23,9 +23,9 @@
 
 .CODE
 
-    ; Login module entry points.""
+    ; Login module entry points.
     EXTRN DO_LOGIN:NEAR
-    EXTRN LOGOUT:NEAR;
+    EXTRN LOGOUT:NEAR
 
     ; Feature module entry points.
     EXTRN OrderModule:NEAR
@@ -48,7 +48,9 @@ main PROC
 
 APPLICATION_LOOP:
     CALL ClearScreen
-    CALL DO_LOGIN                 ; returns only after a valid login
+    CALL DO_LOGIN                  ; shows the Login/Register/Quit menu
+                                    ; itself now; returns only once a
+                                    ; real login has succeeded
     CALL PostLoginMenu             ; returns when the user logs out
     JMP APPLICATION_LOOP
 main ENDP

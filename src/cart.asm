@@ -4,11 +4,15 @@
 ; Owns the shopping cart: what's in it (qty_burger etc.), the
 ; running total (total_price), and - since it's the one place that
 ; knows what everything costs - the item prices themselves
-; (PRICE_BURGER etc.) and the 10% "proximity discount" math
-; (CALC_PRICE). menu.asm calls CALC_PRICE when adding an item so
-; the discount is worked out exactly the same way everywhere it's
-; used; checkout.asm reads DISCOUNT_TOTAL to show how much of the
-; final bill was saved that way.
+; (PRICE_BURGER etc.) and the 10% "proximity discount" (CALC_PRICE).
+; menu.asm calls CALC_PRICE when adding an item so the discount is
+; worked out exactly the same way everywhere it's used; checkout.asm
+; reads DISCOUNT_TOTAL to show how much of the final bill was saved
+; that way.
+;
+; CALC_PRICE is hardcoded, not calculated at runtime: with only 4
+; fixed menu prices, the 10%-off price for each one is already
+; worked out by hand inside CALC_PRICE below - no multiply/divide.
 ;
 ; The discount itself depends on CURRENT_DISCOUNT, a flag login.asm
 ; sets to 1 when the logged-in account's saved address is close
@@ -182,23 +186,46 @@ PRINT_ITEM_PRICE ENDP
 ;     IN:  AX = base price (whole ringgit)
 ;     OUT: AX = price to actually charge
 ;          BX = amount saved (0 if CURRENT_DISCOUNT isn't set)
-;     Rounds to the nearest ringgit instead of always rounding down
-;     (adding half of 100 before dividing does that) - otherwise a
-;     10% discount on a small whole-ringgit price like RM5 would
-;     round all the way down to RM0 saved. ---
+;
+;     HARDCODED ON PURPOSE: there are only 4 possible prices on this
+;     menu (RM5, RM14, RM7, RM6 - see PRICE_BURGER etc. above), so
+;     instead of multiplying/dividing to work out 10% every single
+;     time, the 10%-off price for each one has already been worked
+;     out by hand (rounded to the nearest ringgit) and is just
+;     looked up below:
+;         RM5  x 10% = RM0.50 -> rounds to RM1 off -> charge RM4
+;         RM14 x 10% = RM1.40 -> rounds to RM1 off -> charge RM13
+;         RM7  x 10% = RM0.70 -> rounds to RM1 off -> charge RM6
+;         RM6  x 10% = RM0.60 -> rounds to RM1 off -> charge RM5
+;     (They all happen to round to RM1 off - that's just how these
+;     4 prices work out, not a rule - which is why each one still
+;     gets its own line below instead of one flat "-RM1".) ---
 CALC_PRICE PROC NEAR
     CMP CURRENT_DISCOUNT, 1
     JNE CALC_PRICE_NONE
 
-    PUSH AX                  ; keep the original price safe
-    MOV BX, 10
-    MUL BX                    ; DX:AX = price * 10
-    ADD AX, 50                 ; round to nearest ringgit, not always down
-    MOV BX, 100
-    DIV BX                     ; AX = amount saved (10% of price, rounded)
-    MOV BX, AX                  ; BX = amount saved
-    POP AX                      ; AX = original price
-    SUB AX, BX                   ; AX = price to charge
+    CMP AX, 5                   ; BURGER
+    JNE CP_NOT_BURGER
+    MOV AX, 4                   ; price to charge
+    MOV BX, 1                   ; amount saved
+    RET
+CP_NOT_BURGER:
+    CMP AX, 14                  ; NASI LEMAK
+    JNE CP_NOT_NASI
+    MOV AX, 13
+    MOV BX, 1
+    RET
+CP_NOT_NASI:
+    CMP AX, 7                   ; EGG FRIED RICE
+    JNE CP_NOT_RICE
+    MOV AX, 6
+    MOV BX, 1
+    RET
+CP_NOT_RICE:
+    CMP AX, 6                   ; FRIED CHICKEN
+    JNE CALC_PRICE_NONE         ; not one of our 4 menu prices - no discount
+    MOV AX, 5
+    MOV BX, 1
     RET
 
 CALC_PRICE_NONE:

@@ -3,9 +3,16 @@
 ;
 ; The food menu screen: shows the 4 items, lets the user pick one
 ; to add to the cart, or "5" to go back. Prices and the proximity
-; discount math both live in cart.asm (see CALC_PRICE there) - this
-; file just calls into that so the discount is worked out the exact
-; same way everywhere it shows up.
+; discount (CALC_PRICE) both live in cart.asm - this file just calls
+; into that so the discount is worked out the exact same way
+; everywhere it shows up.
+;
+; NOTHING IS CALCULATED HERE. There are only 4 menu items, fixed
+; forever, so each one gets its own hardcoded block below (ITEM_
+; BURGER, ITEM_NASI_LEMAK, ...) instead of a loop over a list. Adding
+; a 5th item means copying one of those blocks, adding one more CMP/
+; JE above for it, and adding its price as a new variable in cart.asm
+; - not writing a generic "for each item" loop.
 ; =================================================================
 
 .MODEL SMALL
@@ -45,6 +52,8 @@ EXTRN ClearScreen:NEAR                  ; from tools.asm
     pause_msg       DB 0DH,0AH,'Press any key to continue...$',0DH,0AH
 
 .CODE
+; ---- 4 HARDCODED ITEMS, EACH SHOWN AND HANDLED BY ITS OWN LABEL
+;      BELOW (NOT A LOOP OVER AN ARRAY OF ITEMS) ----
 OrderModule PROC NEAR
 FOOD_LOOP:
     CALL ClearScreen
