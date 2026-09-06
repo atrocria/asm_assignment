@@ -24,18 +24,16 @@
 .CODE
 
     ; Login module entry points.""
-    EXTRN LoginMenu:NEAR
-    EXTRN Logout:NEAR;
+    EXTRN DO_LOGIN:NEAR
+    EXTRN LOGOUT:NEAR;
 
     ; Feature module entry points.
     EXTRN OrderModule:NEAR
     EXTRN CartModule:NEAR
     EXTRN HistoryModule:NEAR
 
-    ; Shared utility module entry points.
+    ; Shared utility module entry points. (tools.asm)
     EXTRN ClearScreen:NEAR
-    EXTRN ExitProgram:NEAR
-
 
 ; =============================================================
 ; MAIN PROGRAM
@@ -50,7 +48,7 @@ main PROC
 
 APPLICATION_LOOP:
     CALL ClearScreen
-    CALL LoginMenu                 ; returns only after a valid login
+    CALL DO_LOGIN                 ; returns only after a valid login
     CALL PostLoginMenu             ; returns when the user logs out
     JMP APPLICATION_LOOP
 main ENDP
@@ -108,12 +106,11 @@ OPT_HISTORY:
 
 OPT_LOGOUT:
     CALL ClearScreen
-    CALL Logout
+    CALL LOGOUT
     RET
 
 OPT_QUIT:
-    CALL ExitProgram    ; Calls cleanup/exit
-    MOV AX, 4C00H       ; Terminate process completely
+    MOV AX, 4C00H       ; Terminate process
     INT 21H
 PostLoginMenu ENDP
 

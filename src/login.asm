@@ -1,567 +1,540 @@
+; =================================================================
+; LOGIN.ASM
+;
+; EVERYTHING ABOUT ACCOUNTS LIVES HERE:
+;   - LOGGING IN WITH A USERNAME + PASSWORD
+;   - CREATING ("REGISTERING") A NEW ACCOUNT
+;   - LOGGING OUT (CLEARING THE TYPED-IN USERNAME/PASSWORD SO THE
+;     NEXT PERSON WHO SITS DOWN CAN'T SEE THEM)
+;
+; MAIN.ASM CALLS DO_LOGIN WHEN THE APP STARTS, AND REGISTER IF THE
+; PERSON PICKS "REGISTER" INSTEAD. ONCE DO_LOGIN SUCCEEDS, MAIN.ASM
+; TAKES OVER AND SHOWS THE FOOD-ORDERING MENU.
+;
+; HOW ACCOUNTS ARE STORED
+; ------------------------
+; THERE'S NO REAL DATABASE HERE - JUST ONE BIG BLOCK OF BYTES
+; CALLED USER_DB, SPLIT INTO FIXED-SIZE "RECORDS" (ONE PER USER).
+; EACH RECORD LOOKS LIKE THIS, BACK TO BACK:
+;
+;   [ USERNAME (21 BYTES) ][ PASSWORD (21 BYTES) ][ ADDRESS (31 BYTES) ][ DISCOUNT FLAG (1 BYTE) ]
+;
+; SO RECORD NUMBER 0 STARTS AT USER_DB+0, RECORD NUMBER 1 STARTS AT
+; USER_DB+74, RECORD NUMBER 2 STARTS AT USER_DB+148, AND SO ON
+; (74 = REC_SIZE, THE TOTAL WIDTH OF ONE RECORD - SEE THE EQUS
+; BELOW). EVERY USERNAME/PASSWORD/ADDRESS IS STORED AS A NORMAL
+; DOS STRING: THE REAL TEXT, THEN A '$' CHARACTER TO MARK THE END,
+; THEN ZEROS TO PAD OUT TO THE FIXED WIDTH.
+;
+; THE "DISCOUNT FLAG" BYTE IS 1 IF THAT ACCOUNT'S SAVED ADDRESS IS
+; CLOSE ENOUGH TO DELIGO TO GET THE 10% PROXIMITY DISCOUNT, OR 0 IF
+; NOT. IT GETS SET ONCE, WHEN THE ACCOUNT REGISTERS (OR, FOR THE
+; BUILT-IN ADMIN ACCOUNT, RIGHT HERE IN THE SEED DATA BELOW).
+; =================================================================
+
 .MODEL SMALL
 
-PUBLIC LoginMenu
-PUBLIC Logout
-
+; A TINY SHORTCUT SO WE DON'T HAVE TO WRITE THESE 3 LINES EVERY TIME
+; WE WANT TO PRINT A '$'-TERMINATED STRING.
 .DATA
+    ; ---------- SIZES (CHANGE THESE HERE, NOTHING ELSE, IF THE
+    ;            LAYOUT EVER NEEDS TO GROW) ----------
+    MAX_USERS   EQU 10                     ; HOW MANY ACCOUNTS WE CAN HOLD
+    FIELD_LEN   EQU 21                     ; USERNAME/PASSWORD SLOT WIDTH (20 CHARS + '$')
+    ADDR_LEN    EQU 31                     ; ADDRESS SLOT WIDTH (30 CHARS + '$')
+    DIST_LEN    EQU 11                     ; DISTANCE SLOT WIDTH, USED ONLY FOR THE
+                                            ; REGISTRATION SCREEN'S "(2KM)" HINTS BELOW
 
-    MAX_USERS   EQU 10
-    FIELD_LEN   EQU 21
-    REC_SIZE    EQU 42
+    ADDR_OFFSET EQU FIELD_LEN*2            ; ADDRESS STARTS RIGHT AFTER USERNAME+PASSWORD
+    DISC_OFFSET EQU ADDR_OFFSET + ADDR_LEN ; DISCOUNT FLAG STARTS RIGHT AFTER THE ADDRESS
+    REC_SIZE    EQU DISC_OFFSET + 1        ; TOTAL WIDTH OF ONE WHOLE USER RECORD
 
-    user_db     LABEL BYTE
-                DB  'admin$', 15 DUP(0)
-                DB  'pass123$', 13 DUP(0)
-                DB  (MAX_USERS-1)*REC_SIZE DUP(0)
+    ; ---------- THE ACCOUNTS THEMSELVES ----------
+    ; RECORD 0 IS THE BUILT-IN ADMIN ACCOUNT, SO THERE'S ALWAYS AT
+    ; LEAST ONE WORKING LOGIN WITHOUT HAVING TO REGISTER FIRST.
+    USER_DB     LABEL BYTE
+                DB  'admin$', 15 DUP(0)                ; USERNAME (21 BYTES)
+                DB  'pass123$', 13 DUP(0)               ; PASSWORD (21 BYTES)
+                DB  '12 JALAN AMAN, KL$', 13 DUP(0)      ; ADDRESS  (31 BYTES) - ADMIN DEFAULTS TO KL
+                DB  1                                    ; DISCOUNT FLAG - KL QUALIFIES, SO THIS IS 1
+                DB  (MAX_USERS-1)*REC_SIZE DUP(0)        ; EMPTY ROOM FOR THE OTHER 9 ACCOUNTS
+    USER_COUNT  DB  1                                    ; HOW MANY OF THE MAX_USERS SLOTS ARE FILLED
 
-    user_count  DB  1
+    ; ---------- THE CURRENTLY LOGGED-IN ACCOUNT ----------
+    ; VALIDATE_LOGIN FILLS THESE IN THE MOMENT A LOGIN SUCCEEDS, BY
+    ; COPYING THEM STRAIGHT OUT OF THAT ACCOUNT'S RECORD ABOVE. ANY
+    ; OTHER MODULE (MENU.ASM, CHECKOUT.ASM) CAN READ THEM TO FIND
+    ; OUT WHERE TO DELIVER AND WHETHER THE DISCOUNT APPLIES, WITHOUT
+    ; EVER HAVING TO ASK THE USER AGAIN.
+    CURRENT_ADDR      DB  ADDR_LEN DUP(0)   ; DELIVERY ADDRESS FOR THIS SESSION
+    CURRENT_DISCOUNT  DB  0                 ; 1 = THIS SESSION GETS THE 10% DISCOUNT
 
-    ; ---------- Buffers ----------
-    input_buf     DB  22 DUP('$')
-    user_input    DB  21 DUP('$')
-    pass_input    DB  21 DUP('$')
+    ; ---------- SCRATCH SPACE USED WHILE TYPING THINGS IN ----------
+    INPUT_BUF     DB  22 DUP('$')   ; RAW DOS KEYBOARD-INPUT BUFFER (SEE READ_LINE)
+    USER_INPUT    DB  21 DUP('$')   ; USERNAME TYPED AT THE LOGIN SCREEN
+    PASS_INPUT    DB  21 DUP('$')   ; PASSWORD TYPED AT THE LOGIN SCREEN
+    NEW_USER      DB  21 DUP('$')   ; USERNAME BEING CHOSEN WHILE REGISTERING
+    NEW_PASS      DB  21 DUP('$')   ; PASSWORD BEING CHOSEN WHILE REGISTERING
+    CONFIRM_PASS  DB  21 DUP('$')   ; PASSWORD TYPED A 2ND TIME, TO CHECK FOR TYPOS
+    NEW_ADDR      DB  31 DUP('$')   ; ADDRESS CHOSEN WHILE REGISTERING
+    NEW_DIST      DB  11 DUP('$')   ; THAT ADDRESS'S DISTANCE, JUST FOR THE ON-SCREEN HINT
+    NEW_DISCOUNT  DB  0             ; THAT ADDRESS'S DISCOUNT FLAG (0 OR 1)
 
-    new_user      DB  21 DUP('$')
-    new_pass      DB  21 DUP('$')
-    confirm_pass  DB  21 DUP('$')
+    ; ---------- THE 3 FIXED DELIVERY ADDRESSES OFFERED AT REGISTRATION ----------
+    ; ADDR_POOL, DIST_POOL AND ADDR_DISCOUNT ARE 3 SEPARATE LISTS THAT
+    ; ALL LINE UP BY INDEX: OPTION 1 IS ADDR_POOL[0] / DIST_POOL[0] /
+    ; ADDR_DISCOUNT[0], OPTION 2 IS INDEX 1, OPTION 3 IS INDEX 2.
+    ADDR_POOL   LABEL BYTE
+    DB  '12 JALAN AMAN, KL$', 13 DUP(0)      ; OPTION 1
+    DB  '45 LORONG DAMAI, KL$', 11 DUP(0)    ; OPTION 2
+    DB  '7 TAMAN INDAH, JB$', 13 DUP(0)      ; OPTION 3
 
-    ; ---------- Screen text ----------
-    main_menu_msg   DB  0DH,0AH
-                    DB  '========================================',0DH,0AH
-                    DB  '     FOOD DELIVERY SYSTEM               ',0DH,0AH
-                    DB  '========================================',0DH,0AH
-                    DB  '1. Login',0DH,0AH
-                    DB  '2. Register New Account',0DH,0AH
-                    DB  '3. Exit',0DH,0AH
-                    DB  'Choose an option: $'
+    DIST_POOL   LABEL BYTE
+    DB  '2KM$', 7 DUP(0)                    ; OPTION 1 DISTANCE
+    DB  '5KM$', 7 DUP(0)                    ; OPTION 2 DISTANCE
+    DB  '8KM$', 7 DUP(0)                    ; OPTION 3 DISTANCE
 
-    title_msg       DB  0DH,0AH
-                    DB  '----------------------------------------',0DH,0AH
-                    DB  '               LOGIN                    ',0DH,0AH
-                    DB  '----------------------------------------',0DH,0AH,'$'
+    ADDR_DISCOUNT LABEL BYTE                 ; 1 = CLOSE ENOUGH FOR THE 10% DISCOUNT
+    DB  1                                    ; OPTION 1 (KL) - DISCOUNTABLE
+    DB  1                                    ; OPTION 2 (KL) - DISCOUNTABLE
+    DB  0                                    ; OPTION 3 (JB) - NOT DISCOUNTABLE
 
-    reg_title_msg   DB  0DH,0AH
-                    DB  '----------------------------------------',0DH,0AH
-                    DB  '        NEW ACCOUNT REGISTRATION        ',0DH,0AH
-                    DB  '----------------------------------------',0DH,0AH,'$'
+    ; ---------- SCREEN TEXT ----------
+    ; (THE TOP-LEVEL "1.LOGIN/2.REGISTER/3.EXIT" MENU LIVES IN
+    ; MAIN.ASM, SINCE THE MENU LOOP ITSELF LIVES THERE)
+    TITLE_MSG       DB  0DH,0AH,'-- LOGIN --',0DH,0AH,'$'
+    REG_TITLE_MSG   DB  0DH,0AH,'-- NEW ACCOUNT REGISTRATION --',0DH,0AH,'$'
 
-    prompt_user     DB  0DH,0AH,'Username : $'
-    prompt_pass     DB  0DH,0AH,'Password : $'
+    PROMPT_USER     DB  0DH,0AH,'USERNAME : $'
+    PROMPT_PASS     DB  0DH,0AH,'PASSWORD : $'
+    REG_PROMPT_USER     DB  0DH,0AH,'CHOOSE A USERNAME : $'
+    REG_PROMPT_PASS     DB  0DH,0AH,'CHOOSE A PASSWORD : $'
+    REG_PROMPT_CONFIRM  DB  0DH,0AH,'CONFIRM PASSWORD  : $'
+    REG_ADDR_TITLE      DB  0DH,0AH,'SELECT YOUR DELIVERY ADDRESS:',0DH,0AH,'$'
+    REG_ADDR_CHOICE_MSG DB  0DH,0AH,'ENTER CHOICE (1-3): $'
+    DISCOUNT_TAG_MSG    DB  ' (10% OFF)$'
 
-    reg_prompt_user     DB  0DH,0AH,'Username : $'
-    reg_prompt_pass     DB  0DH,0AH,'Password : $'
-    reg_prompt_confirm  DB  0DH,0AH,'Confirm password  : $'
-
-    success_msg     DB  0DH,0AH,'Login successful! Welcome to Food Delivery System.',0DH,0AH,'$'
-    fail_msg        DB  0DH,0AH,'Invalid username or password. Try again.',0DH,0AH,'$'
-    logout_msg      DB  0DH,0AH,'You have been logged out. Goodbye!',0DH,0AH,'$'
-
-    reg_dup_msg       DB  0DH,0AH,'That username is already taken. Please try again.',0DH,0AH,'$'
-    reg_full_msg      DB  0DH,0AH,'Registration is full - no more accounts can be added.',0DH,0AH,'$'
-    reg_mismatch_msg  DB  0DH,0AH,'Passwords do not match. Please re-enter the password.',0DH,0AH,'$'
-    reg_success_msg   DB  0DH,0AH,'Account created successfully! You can now log in.',0DH,0AH,'$'
-    invalid_choice_msg DB 0DH,0AH,'Invalid choice, please try again.',0DH,0AH,'$'
-
-    newline         DB  0DH,0AH,'$'
+    SUCCESS_MSG     DB  0DH,0AH,'LOGIN SUCCESSFUL! WELCOME.',0DH,0AH,'$'
+    FAIL_MSG        DB  0DH,0AH,'INVALID USERNAME OR PASSWORD.',0DH,0AH,'$'
+    LOGOUT_MSG      DB  0DH,0AH,'LOGGED OUT. GOODBYE!',0DH,0AH,'$'
+    REG_DUP_MSG       DB  0DH,0AH,'USERNAME ALREADY TAKEN.',0DH,0AH,'$'
+    REG_FULL_MSG      DB  0DH,0AH,'REGISTRATION IS FULL.',0DH,0AH,'$'
+    REG_MISMATCH_MSG  DB  0DH,0AH,'PASSWORDS DO NOT MATCH.',0DH,0AH,'$'
+    REG_SUCCESS_MSG   DB  0DH,0AH,'ACCOUNT CREATED! YOU CAN NOW LOG IN.',0DH,0AH,'$'
+    INVALID_CHOICE_MSG DB 0DH,0AH,'INVALID CHOICE.',0DH,0AH,'$'
+    NEWLINE         DB  0DH,0AH,'$'
 
 .CODE
-
-EXTRN ClearScreen:NEAR
-
-;-------------------------------------------------------------
-; LOGIN_MENU
-; Displays the Login / Register / Exit menu.  It returns to main.asm
-; only after a successful login.
-;-------------------------------------------------------------
-LoginMenu PROC NEAR
-LOGIN_MENU_LOOP:
-    LEA DX, main_menu_msg
-    MOV AH, 09H
-    INT 21H
-
-    MOV AH, 01H                   ; read a single character (with echo)
-    INT 21H
-
-    CMP AL, '1'
-    JE  GOTO_LOGIN
-    CMP AL, '2'
-    JE  GOTO_REGISTER
-    CMP AL, '3'
-    JE  GOTO_EXIT
-
-    LEA DX, invalid_choice_msg
-    MOV AH, 09H
-    INT 21H
-    JMP LOGIN_MENU_LOOP
-
-GOTO_LOGIN:
-    CALL DO_LOGIN                 ; loops internally until credentials are valid
-    RET                           ; main.asm now shows the application menu
-
-GOTO_REGISTER:
-    CALL ClearScreen
-    CALL REGISTER
-    JMP LOGIN_MENU_LOOP
-
-GOTO_EXIT:
-    MOV AH, 4CH
-    INT 21H
-LoginMenu ENDP
-
+    PUBLIC DO_LOGIN, REGISTER, LOGOUT, CURRENT_ADDR, CURRENT_DISCOUNT
+    ; SHARED HELPERS FROM TOOLS.ASM (SEE THAT FILE FOR WHAT EACH ONE DOES)
+    EXTRN PRINT_STRING:NEAR, PRINT_CHAR:NEAR
+    EXTRN COPY_STRING:NEAR, CLEAR_BUF:NEAR, STR_COMPARE:NEAR
+    ; MAIN.ASM SETS UP DS AND DRIVES THE TOP-LEVEL MENU; IT JUST
+    ; NEEDS TO CALL DO_LOGIN / CALL REGISTER / CALL LOGOUT, WHICH IS
+    ; WHY ONLY THOSE THREE (PLUS THE TWO CURRENT_ VARIABLES) ARE
+    ; EXPORTED.
 
 ;-------------------------------------------------------------
-; DO_LOGIN
-; Repeats the login screen until credentials are valid.
+; READ_LINE  -  READS ONE LINE OF NORMAL (VISIBLE) TEXT.
+; IN:  DI = WHERE TO STORE IT
+; USES DOS'S OWN BUFFERED-INPUT FUNCTION, THEN COPIES THE RESULT
+; INTO DI AS A PLAIN '$'-TERMINATED STRING.
 ;-------------------------------------------------------------
-DO_LOGIN PROC
-LOGIN_LOOP:
-    CALL ClearScreen
-    CALL SHOW_LOGIN_SCREEN
-    CALL READ_USERNAME
-    CALL READ_PASSWORD
-    CALL VALIDATE_LOGIN
-
-    CMP AL, 1                     ; AL = 1 if valid, 0 if invalid
-    JE  LOGIN_OK
-
-    LEA DX, fail_msg
-    MOV AH, 09H
+READ_LINE PROC
+    MOV INPUT_BUF[0], 20
+    PUSH DI
+    LEA DX, INPUT_BUF
+    MOV AH, 0AH
     INT 21H
-    JMP LOGIN_LOOP
-
-LOGIN_OK:
-    LEA DX, success_msg
-    MOV AH, 09H
-    INT 21H
-
-    RET                             ; return control to main.asm
-DO_LOGIN ENDP
-
-
-;-------------------------------------------------------------
-; SHOW_LOGIN_SCREEN
-;-------------------------------------------------------------
-SHOW_LOGIN_SCREEN PROC
-    LEA DX, title_msg
-    MOV AH, 09H
-    INT 21H
-    RET
-SHOW_LOGIN_SCREEN ENDP
-
-
-;-------------------------------------------------------------
-; READ_USERNAME
-; Reads username using DOS buffered input, converts DOS's
-; length-prefixed format into a '$'-terminated string.
-;-------------------------------------------------------------
-READ_USERNAME PROC
-    LEA DX, prompt_user
-    MOV AH, 09H
-    INT 21H
-
-    MOV input_buf[0], 20          ; max input length
-    LEA DX, input_buf
-    MOV AH, 0AH                   ; buffered keyboard input
-    INT 21H
-
-    MOV CL, input_buf[1]          ; number of chars actually entered
+    POP DI
+    MOV CL, INPUT_BUF[1]
     MOV CH, 0
-    LEA BX, input_buf+2           ; source: entered chars
-    LEA DI, user_input            ; destination
-
+    LEA BX, INPUT_BUF+2
     CMP CX, 0
-    JE  COPY_USER_DONE
-
-COPY_USER_LOOP:
+    JE  RL_DONE
+RL_LOOP:
     MOV AL, [BX]
     MOV [DI], AL
     INC BX
     INC DI
-    LOOP COPY_USER_LOOP
-
-COPY_USER_DONE:
+    LOOP RL_LOOP
+RL_DONE:
     MOV BYTE PTR [DI], '$'
     RET
-READ_USERNAME ENDP
+READ_LINE ENDP
 
 
 ;-------------------------------------------------------------
-; READ_PASSWORD
-; Reads password one character at a time (no echo), prints '*'.
-; Capped at 20 characters so it can never overflow its 21-byte
-; buffer (or spill into whatever data follows it in memory).
+; READ_MASKED  -  READS A PASSWORD ONE KEY AT A TIME, ECHOING '*'
+; INSTEAD OF THE REAL CHARACTER. BACKSPACE WORKS TOO.
+; IN: DI = WHERE TO STORE IT
 ;-------------------------------------------------------------
-READ_PASSWORD PROC
-    LEA DX, prompt_pass
-    MOV AH, 09H
+READ_MASKED PROC
+    XOR CX, CX
+RM_LOOP:
+    MOV AH, 08H
     INT 21H
-
-    LEA DI, pass_input
-    XOR CX, CX                    ; character counter
-
-PASS_LOOP:
-    MOV AH, 08H                   ; read char, no echo
-    INT 21H
-    CMP AL, 0DH                   ; ENTER pressed?
-    JE  PASS_DONE
-
-    CMP AL, 08H                   ; backspace?
-    JE  PASS_BACKSPACE
-
-    CMP CX, 20                    ; already at max length?
-    JGE PASS_LOOP                 ; ignore extra keystrokes
-
+    CMP AL, 0DH
+    JE  RM_DONE
+    CMP AL, 08H
+    JE  RM_BACK
+    CMP CX, 20
+    JGE RM_LOOP
     MOV [DI], AL
     INC DI
     INC CX
-
     PUSH AX
     MOV DL, '*'
-    MOV AH, 02H
-    INT 21H
+    CALL PRINT_CHAR
     POP AX
-    JMP PASS_LOOP
-
-PASS_BACKSPACE:
+    JMP RM_LOOP
+RM_BACK:
     CMP CX, 0
-    JE  PASS_LOOP
+    JE  RM_LOOP
     DEC DI
     DEC CX
     MOV DL, 08H
-    MOV AH, 02H
-    INT 21H
+    CALL PRINT_CHAR
     MOV DL, ' '
-    INT 21H
+    CALL PRINT_CHAR
     MOV DL, 08H
-    INT 21H
-    JMP PASS_LOOP
-
-PASS_DONE:
+    CALL PRINT_CHAR
+    JMP RM_LOOP
+RM_DONE:
     MOV BYTE PTR [DI], '$'
-    LEA DX, newline
-    MOV AH, 09H
-    INT 21H
+    LEA DX, NEWLINE
+    CALL PRINT_STRING
     RET
-READ_PASSWORD ENDP
+READ_MASKED ENDP
 
 
 ;-------------------------------------------------------------
-; VALIDATE_LOGIN
-; Searches every stored account (0 .. user_count-1) for one
-; whose username AND password both match what was typed.
-; Returns: AL = 1 if a matching account is found, else AL = 0
+; STR_COMPARE  -  SI, DI = '$'-TERMINATED STRINGS. AL=1 IF EQUAL.
+;
+; ON PURPOSE, THIS USES DL (NOT BL) AS SCRATCH SPACE FOR THE
+; CHARACTER IT'S CURRENTLY LOOKING AT. BX IS VERY OFTEN USED BY
+; THE *CALLER* TO HOLD A POINTER (SEE FIND_USER BELOW, WHICH KEEPS
+; A USER_DB RECORD ADDRESS IN BX ACROSS A CALL TO THIS ROUTINE) -
+; BL IS JUST THE BOTTOM HALF OF BX, SO TOUCHING IT HERE WOULD
+; SILENTLY CORRUPT THAT POINTER. DL DOESN'T HAVE THAT PROBLEM
+; ANYWHERE IN THIS FILE.
+;-------------------------------------------------------------
+
+;-------------------------------------------------------------
+; COPY_STRING  -  COPIES '$'-TERMINATED SI TO DI, INCLUSIVE
+;-------------------------------------------------------------
+
+;-------------------------------------------------------------
+; CLEAR_BUF  -  DI=PTR, CX=COUNT. ZEROES CX BYTES AT DI.
+;-------------------------------------------------------------
+
+;-------------------------------------------------------------
+; FIND_USER  -  SI = USERNAME TO SEARCH FOR ('$'-TERMINATED).
+; RETURNS BX = MATCHING RECORD POINTER, OR 0 IF NOT FOUND.
+; SHARED BY VALIDATE_LOGIN (LOGIN) AND REGISTER (DUP CHECK).
+;-------------------------------------------------------------
+FIND_USER PROC
+    MOV CL, USER_COUNT
+    MOV CH, 0
+    LEA BX, USER_DB
+    CMP CX, 0
+    JE  FU_NOTFOUND
+FU_LOOP:
+    PUSH CX
+    PUSH SI
+    MOV DI, BX
+    CALL STR_COMPARE
+    POP SI
+    POP CX
+    CMP AL, 1
+    JE  FU_FOUND
+    ADD BX, REC_SIZE
+    LOOP FU_LOOP
+FU_NOTFOUND:
+    XOR BX, BX
+FU_FOUND:
+    RET
+FIND_USER ENDP
+
+
+;-------------------------------------------------------------
+; DO_LOGIN  -  SHOWS THE LOGIN SCREEN UNTIL A REAL ACCOUNT MATCHES,
+; THEN HANDS CONTROL STRAIGHT BACK TO MAIN.ASM (WHICH OWNS THE
+; FOOD-ORDERING MENU THAT COMES NEXT).
+;-------------------------------------------------------------
+DO_LOGIN PROC
+LOGIN_LOOP:
+    LEA DX, TITLE_MSG
+    CALL PRINT_STRING
+    LEA DX, PROMPT_USER
+    CALL PRINT_STRING
+    LEA DI, USER_INPUT
+    CALL READ_LINE
+
+    LEA DX, PROMPT_PASS
+    CALL PRINT_STRING
+    LEA DI, PASS_INPUT
+    CALL READ_MASKED
+
+    CALL VALIDATE_LOGIN
+    CMP AL, 1
+    JE  LOGIN_OK
+    LEA DX, FAIL_MSG
+    CALL PRINT_STRING
+    JMP LOGIN_LOOP
+
+LOGIN_OK:
+    LEA DX, SUCCESS_MSG
+    CALL PRINT_STRING
+    RET
+DO_LOGIN ENDP
+
+
+;-------------------------------------------------------------
+; VALIDATE_LOGIN  -  AL = 1 IF USER_INPUT/PASS_INPUT MATCH A RECORD.
+; ON A MATCH, ALSO COPIES THAT ACCOUNT'S ADDRESS AND DISCOUNT FLAG
+; INTO CURRENT_ADDR / CURRENT_DISCOUNT, SO THE REST OF THE PROGRAM
+; KNOWS WHERE THIS ORDER SHOULD GO WITHOUT ASKING AGAIN.
 ;-------------------------------------------------------------
 VALIDATE_LOGIN PROC
-    MOV CL, user_count
-    MOV CH, 0
-    CMP CX, 0
-    JE  VALIDATE_FAIL
+    LEA SI, USER_INPUT
+    CALL FIND_USER
+    CMP BX, 0
+    JE  VL_FAIL
 
-    LEA BX, user_db                ; BX = base of current record
-
-VALIDATE_LOOP:
-    PUSH CX
-    PUSH BX
-    LEA SI, user_input
-    MOV DI, BX                     ; username field of this record
-    CALL STR_COMPARE
-    POP BX
-    POP CX
-    CMP AL, 1
-    JNE VALIDATE_NEXT
-
-    ; username matched this record - now check its password field
-    PUSH CX
-    PUSH BX
-    LEA SI, pass_input
+    LEA SI, PASS_INPUT
     MOV DI, BX
-    ADD DI, FIELD_LEN               ; password field starts 21 bytes in
-    CALL STR_COMPARE
-    POP BX
-    POP CX
+    ADD DI, FIELD_LEN
+    CALL STR_COMPARE           ; AL = 1/0 - BX STILL POINTS AT THE RECORD
     CMP AL, 1
-    JE  VALIDATE_SUCCESS
-    JMP VALIDATE_FAIL               ; right username, wrong password
+    JNE VL_FAIL
 
-VALIDATE_NEXT:
-    ADD BX, REC_SIZE                ; move to next record
-    LOOP VALIDATE_LOOP
+    ; --- REMEMBER THIS ACCOUNT'S ADDRESS + DISCOUNT FOR LATER ---
+    MOV SI, BX
+    ADD SI, ADDR_OFFSET
+    LEA DI, CURRENT_ADDR
+    CALL COPY_STRING
 
-VALIDATE_FAIL:
-    MOV AL, 0
+    MOV SI, BX
+    ADD SI, DISC_OFFSET
+    MOV AL, [SI]
+    MOV CURRENT_DISCOUNT, AL
+
+    MOV AL, 1
     RET
 
-VALIDATE_SUCCESS:
-    MOV AL, 1
+VL_FAIL:
+    MOV AL, 0
     RET
 VALIDATE_LOGIN ENDP
 
 
 ;-------------------------------------------------------------
-; STR_COMPARE
-; Compares two '$'-terminated strings pointed to by DS:SI, DS:DI
-; Returns: AL = 1 if equal, AL = 0 if not equal
+; CHOOSE_ADDRESS  -  SHOWS THE 3 FIXED ADDRESSES (WITH DISTANCE,
+; AND A "(10% OFF)" TAG ON THE ONES CLOSE ENOUGH TO THE STORE),
+; THEN COPIES WHICHEVER ONE IS PICKED INTO NEW_ADDR / NEW_DISCOUNT
+; FOR REGISTER TO SAVE INTO THE NEW ACCOUNT'S RECORD.
 ;-------------------------------------------------------------
-STR_COMPARE PROC
-CMP_LOOP:
-    MOV AL, [SI]
-    MOV BL, [DI]
-    CMP AL, BL
-    JNE CMP_NOT_EQUAL
+CHOOSE_ADDRESS PROC
+CA_SHOW_MENU:
+    LEA DX, REG_ADDR_TITLE
+    CALL PRINT_STRING
+    MOV BL, '1'                 ; BL = THE OPTION NUMBER WE'RE PRINTING
+    LEA SI, ADDR_POOL            ; SI WALKS THE ADDRESS LIST
+    LEA DI, DIST_POOL            ; DI WALKS THE MATCHING DISTANCE LIST
 
-    CMP AL, '$'
-    JE  CMP_EQUAL
+CA_PRINT_LOOP:
+    MOV DL, BL
+    CALL PRINT_CHAR
+    MOV DL, '.'
+    CALL PRINT_CHAR
+    MOV DL, ' '
+    CALL PRINT_CHAR
+    MOV DX, SI            ; PRINT THIS OPTION'S ADDRESS
+    CALL PRINT_STRING
+    MOV DL, ' '
+    CALL PRINT_CHAR
+    MOV DL, '('
+    CALL PRINT_CHAR
+    MOV DX, DI            ; PRINT THIS OPTION'S DISTANCE
+    CALL PRINT_STRING
+    MOV DL, ')'
+    CALL PRINT_CHAR
 
-    INC SI
-    INC DI
-    JMP CMP_LOOP
+    ; --- TAG THIS OPTION "(10% OFF)" IF ADDR_DISCOUNT SAYS IT QUALIFIES ---
+    PUSH SI                     ; SAVE THE REAL ADDR_POOL POSITION - WE
+                                 ; NEED SI AS SCRATCH SPACE FOR A MOMENT
+    MOV AL, BL
+    SUB AL, '1'                 ; AL = 0, 1, OR 2 - WHICH OPTION IS THIS?
+    MOV AH, 0
+    LEA SI, ADDR_DISCOUNT
+    ADD SI, AX
+    CMP BYTE PTR [SI], 1
+    POP SI                      ; PUT THE REAL ADDR_POOL POSITION BACK
+    JNE CA_NO_TAG
+    LEA DX, DISCOUNT_TAG_MSG
+    CALL PRINT_STRING
+CA_NO_TAG:
 
-CMP_EQUAL:
-    MOV AL, 1
+    LEA DX, NEWLINE
+    CALL PRINT_STRING
+    ADD SI, ADDR_LEN
+    ADD DI, DIST_LEN
+    INC BL
+    CMP BL, '4'
+    JAE CA_DONE_LOOP             ; DONE ONCE WE'VE SHOWN OPTIONS 1, 2 AND 3
+    JMP CA_PRINT_LOOP
+CA_DONE_LOOP:
+
+    LEA DX, REG_ADDR_CHOICE_MSG
+    CALL PRINT_STRING
+    MOV AH, 01H
+    INT 21H
+    CMP AL, '1'
+    JB  CA_BAD
+    CMP AL, '3'
+    JA  CA_BAD
+
+    SUB AL, '1'           ; AL = 0,1,2 (INDEX)
+    MOV DL, AL            ; KEEP THE INDEX SAFE IN DL - AL/AX GETS
+                           ; REUSED BY MUL BELOW, MORE THAN ONCE
+
+    MOV AH, 0
+    MOV BX, ADDR_LEN
+    MUL BX                ; AX = BYTE OFFSET INTO ADDR_POOL
+    LEA SI, ADDR_POOL
+    ADD SI, AX
+    LEA DI, NEW_ADDR
+    CALL COPY_STRING
+
+    MOV AL, DL            ; RESTORE THE INDEX
+    MOV AH, 0
+    MOV BX, DIST_LEN
+    MUL BX                ; AX = BYTE OFFSET INTO DIST_POOL
+    LEA SI, DIST_POOL
+    ADD SI, AX
+    LEA DI, NEW_DIST
+    CALL COPY_STRING
+
+    MOV AL, DL            ; RESTORE THE INDEX ONCE MORE - ADDR_DISCOUNT
+    MOV AH, 0             ; IS ONE BYTE PER OPTION, SO NO MUL NEEDED HERE
+    LEA BX, ADDR_DISCOUNT
+    ADD BX, AX
+    MOV AL, [BX]
+    MOV NEW_DISCOUNT, AL
+
+    LEA DX, NEWLINE
+    CALL PRINT_STRING
     RET
 
-CMP_NOT_EQUAL:
-    MOV AL, 0
-    RET
-STR_COMPARE ENDP
+CA_BAD:
+    LEA DX, NEWLINE
+    CALL PRINT_STRING
+    LEA DX, INVALID_CHOICE_MSG
+    CALL PRINT_STRING
+    JMP CA_SHOW_MENU
+CHOOSE_ADDRESS ENDP
 
 
 ;-------------------------------------------------------------
-; COPY_STRING
-; Copies a '$'-terminated string from DS:SI to DS:DI, inclusive
-; of the terminating '$'. Used when writing into fixed-width
-; record fields (caller positions DI first).
-;-------------------------------------------------------------
-COPY_STRING PROC
-CS_LOOP:
-    MOV AL, [SI]
-    MOV [DI], AL
-    INC SI
-    INC DI
-    CMP AL, '$'
-    JE  CS_DONE
-    JMP CS_LOOP
-CS_DONE:
-    RET
-COPY_STRING ENDP
-
-
-;-------------------------------------------------------------
-; REGISTER
-; Creates a new account: reads a username, rejects duplicates,
-; reads + confirms a password, then appends the record.
+; REGISTER  -  CREATES A NEW ACCOUNT: USERNAME, PASSWORD (TYPED
+; TWICE TO CATCH TYPOS), THEN A DELIVERY ADDRESS FROM THE 3 FIXED
+; CHOICES ABOVE.
 ;-------------------------------------------------------------
 REGISTER PROC
 REG_START:
-    LEA DX, reg_title_msg
-    MOV AH, 09H
-    INT 21H
-
-    CMP user_count, MAX_USERS
+    LEA DX, REG_TITLE_MSG
+    CALL PRINT_STRING
+    CMP USER_COUNT, MAX_USERS
     JL  REG_ROOM_OK
-    LEA DX, reg_full_msg
-    MOV AH, 09H
-    INT 21H
+    LEA DX, REG_FULL_MSG
+    CALL PRINT_STRING
     RET
 
 REG_ROOM_OK:
-    ; --- read desired username ---
-    LEA DX, reg_prompt_user
-    MOV AH, 09H
-    INT 21H
+    LEA DX, REG_PROMPT_USER
+    CALL PRINT_STRING
+    LEA DI, NEW_USER
+    CALL READ_LINE
 
-    MOV input_buf[0], 20
-    LEA DX, input_buf
-    MOV AH, 0AH
-    INT 21H
-
-    MOV CL, input_buf[1]
-    MOV CH, 0
-    LEA BX, input_buf+2
-    LEA DI, new_user
-    CMP CX, 0
-    JE  REG_USER_COPY_DONE
-REG_USER_COPY_LOOP:
-    MOV AL, [BX]
-    MOV [DI], AL
-    INC BX
-    INC DI
-    LOOP REG_USER_COPY_LOOP
-REG_USER_COPY_DONE:
-    MOV BYTE PTR [DI], '$'
-
-    ; --- reject if username already exists ---
-    MOV CL, user_count
-    MOV CH, 0
-    LEA BX, user_db
-REG_DUP_LOOP:
-    PUSH CX
-    PUSH BX
-    LEA SI, new_user
-    MOV DI, BX
-    CALL STR_COMPARE
-    POP BX
-    POP CX
-    CMP AL, 1
-    JE  REG_DUPLICATE
-    ADD BX, REC_SIZE
-    LOOP REG_DUP_LOOP
+    LEA SI, NEW_USER
+    CALL FIND_USER
+    CMP BX, 0
+    JNE REG_DUPLICATE
     JMP REG_READ_PASSWORD
 
 REG_DUPLICATE:
-    LEA DX, reg_dup_msg
-    MOV AH, 09H
-    INT 21H
-    JMP REG_START                   ; start registration over
+    LEA DX, REG_DUP_MSG
+    CALL PRINT_STRING
+    JMP REG_START
 
-    ; --- read desired password (masked) ---
 REG_READ_PASSWORD:
-    LEA DX, reg_prompt_pass
-    MOV AH, 09H
-    INT 21H
-    LEA DI, new_pass
-    XOR CX, CX
-REG_PASS_LOOP:
-    MOV AH, 08H
-    INT 21H
-    CMP AL, 0DH
-    JE  REG_PASS_DONE
-    CMP AL, 08H
-    JE  REG_PASS_BACK
-    CMP CX, 20
-    JGE REG_PASS_LOOP
-    MOV [DI], AL
-    INC DI
-    INC CX
-    PUSH AX
-    MOV DL, '*'
-    MOV AH, 02H
-    INT 21H
-    POP AX
-    JMP REG_PASS_LOOP
-REG_PASS_BACK:
-    CMP CX, 0
-    JE  REG_PASS_LOOP
-    DEC DI
-    DEC CX
-    MOV DL, 08H
-    MOV AH, 02H
-    INT 21H
-    MOV DL, ' '
-    INT 21H
-    MOV DL, 08H
-    INT 21H
-    JMP REG_PASS_LOOP
-REG_PASS_DONE:
-    MOV BYTE PTR [DI], '$'
-    LEA DX, newline
-    MOV AH, 09H
-    INT 21H
+    LEA DX, REG_PROMPT_PASS
+    CALL PRINT_STRING
+    LEA DI, NEW_PASS
+    CALL READ_MASKED
 
-    ; --- confirm password ---
-    LEA DX, reg_prompt_confirm
-    MOV AH, 09H
-    INT 21H
-    LEA DI, confirm_pass
-    XOR CX, CX
-REG_CONFIRM_LOOP:
-    MOV AH, 08H
-    INT 21H
-    CMP AL, 0DH
-    JE  REG_CONFIRM_DONE
-    CMP AL, 08H
-    JE  REG_CONFIRM_BACK
-    CMP CX, 20
-    JGE REG_CONFIRM_LOOP
-    MOV [DI], AL
-    INC DI
-    INC CX
-    PUSH AX
-    MOV DL, '*'
-    MOV AH, 02H
-    INT 21H
-    POP AX
-    JMP REG_CONFIRM_LOOP
-REG_CONFIRM_BACK:
-    CMP CX, 0
-    JE  REG_CONFIRM_LOOP
-    DEC DI
-    DEC CX
-    MOV DL, 08H
-    MOV AH, 02H
-    INT 21H
-    MOV DL, ' '
-    INT 21H
-    MOV DL, 08H
-    INT 21H
-    JMP REG_CONFIRM_LOOP
-REG_CONFIRM_DONE:
-    MOV BYTE PTR [DI], '$'
-    LEA DX, newline
-    MOV AH, 09H
-    INT 21H
+    LEA DX, REG_PROMPT_CONFIRM
+    CALL PRINT_STRING
+    LEA DI, CONFIRM_PASS
+    CALL READ_MASKED
 
-    ; --- passwords must match ---
-    LEA SI, new_pass
-    LEA DI, confirm_pass
+    LEA SI, NEW_PASS
+    LEA DI, CONFIRM_PASS
     CALL STR_COMPARE
     CMP AL, 1
-    JE  REG_SAVE
-    LEA DX, reg_mismatch_msg
-    MOV AH, 09H
-    INT 21H
-    JMP REG_READ_PASSWORD           ; retry password (username already confirmed unique)
+    JE  REG_CHOOSE_ADDRESS
+    LEA DX, REG_MISMATCH_MSG
+    CALL PRINT_STRING
+    JMP REG_READ_PASSWORD
 
-    ; --- write the new record into user_db ---
-REG_SAVE:
-    MOV AL, user_count
+REG_CHOOSE_ADDRESS:
+    CALL CHOOSE_ADDRESS          ; FILLS IN NEW_ADDR AND NEW_DISCOUNT
+
+    MOV AL, USER_COUNT
     MOV BL, REC_SIZE
-    MUL BL                          ; AX = user_count * REC_SIZE
-    LEA BX, user_db
-    ADD BX, AX                      ; BX = base of the new record
+    MUL BL
+    LEA BX, USER_DB
+    ADD BX, AX                   ; BX = WHERE THIS NEW RECORD STARTS
 
     MOV DI, BX
-    LEA SI, new_user
-    CALL COPY_STRING                ; write username into field 1
-
+    LEA SI, NEW_USER
+    CALL COPY_STRING              ; USERNAME
     MOV DI, BX
     ADD DI, FIELD_LEN
-    LEA SI, new_pass
-    CALL COPY_STRING                ; write password into field 2
+    LEA SI, NEW_PASS
+    CALL COPY_STRING              ; PASSWORD
+    MOV DI, BX
+    ADD DI, ADDR_OFFSET
+    LEA SI, NEW_ADDR
+    CALL COPY_STRING              ; ADDRESS
 
-    INC user_count
+    MOV DI, BX
+    ADD DI, DISC_OFFSET
+    MOV AL, NEW_DISCOUNT
+    MOV [DI], AL                  ; DISCOUNT FLAG
 
-    LEA DX, reg_success_msg
-    MOV AH, 09H
-    INT 21H
+    INC USER_COUNT
+    LEA DX, REG_SUCCESS_MSG
+    CALL PRINT_STRING
     RET
 REGISTER ENDP
 
 
 ;-------------------------------------------------------------
-; LOGOUT
+; LOGOUT  -  SAYS GOODBYE AND WIPES THE TYPED-IN USERNAME/PASSWORD
+; SO THE NEXT PERSON CAN'T SEE THEM.
 ;-------------------------------------------------------------
-Logout PROC NEAR
-    LEA DX, logout_msg
-    MOV AH, 09H
-    INT 21H
-
-    LEA DI, user_input
+LOGOUT PROC
+    LEA DX, LOGOUT_MSG
+    CALL PRINT_STRING
+    LEA DI, USER_INPUT
     MOV CX, 21
-    MOV AL, 0
-CLEAR_USER:
-    MOV [DI], AL
-    INC DI
-    LOOP CLEAR_USER
-
-    LEA DI, pass_input
+    CALL CLEAR_BUF
+    LEA DI, PASS_INPUT
     MOV CX, 21
-CLEAR_PASS:
-    MOV [DI], AL
-    INC DI
-    LOOP CLEAR_PASS
-
+    CALL CLEAR_BUF
     RET
-Logout ENDP
+LOGOUT ENDP
 
 END

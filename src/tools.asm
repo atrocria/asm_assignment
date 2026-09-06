@@ -1,202 +1,331 @@
-.model small
+.MODEL SMALL
 
-PUBLIC PrintString
-PUBLIC NewLine
-PUBLIC ClearScreen
-PUBLIC ReadString
-PUBLIC ReadNum
-PUBLIC ExitProgram
+PUBLIC NEWLINE
+PUBLIC CLEARSCREEN
+PUBLIC READSTRING
+PUBLIC READNUM
+PUBLIC EXITPROGRAM
+PUBLIC PRINT_STRING, PRINT_CHAR, PRINT_NUM
+PUBLIC COPY_STRING, CLEAR_BUF, STR_COMPARE
+PUBLIC CHECK_ALPHA, CHECK_DIGITS
 
-.code
+.CODE
 
-PrintString PROC NEAR
-    ; Input:
-    ; DS:DX = address of a string ending with '$'
+READSTRING PROC NEAR
+    ; INPUT:
+    ; DS:DX = ADDRESS OF DOS INPUT BUFFER
+    ;
+    ; BUFFER:
+    ; BYTE 0 = MAXIMUM LENGTH
+    ; BYTE 1 = ACTUAL LENGTH
+    ; BYTE 2 ONWARD = ENTERED CHARACTERS
+    ;
+    ; ADDS '$' AFTER THE ENTERED TEXT.
 
-    push ax
+    PUSH AX
+    PUSH BX
+    PUSH SI
 
-    mov ah,09h
-    int 21h
+    MOV BX,DX
 
-    pop ax
-    ret
-PrintString ENDP
+    MOV AH,0AH
+    INT 21H
 
+    XOR AX,AX
+    MOV AL,[BX+1]
 
-; ============================================================
-; ReadArrowKey
-;
-; Returns:
-;   AL = 0  -> Up
-;   AL = 1  -> Down
-;   AL = 2  -> Enter
-;   AL = 0FFh -> Other key
-; ============================================================
+    MOV SI,BX
+    ADD SI,2
+    ADD SI,AX
 
-ReadArrowKey PROC
+    MOV BYTE PTR [SI],'$'
 
-    ; listen for bios input and make bios execute
-    MOV AH, 00H
-    INT 16H
-
-    CMP AH, 48H
-    JE  key_up
-
-    CMP AH, 50H
-    JE  key_down
-
-    CMP AL, 0DH
-    JE  key_enter
-
-    MOV AL, 0FFH
+    POP SI
+    POP BX
+    POP AX
     RET
+READSTRING ENDP
 
-key_up:
-    MOV AL, 0
+
+READNUM PROC NEAR
+    ; READS A POSITIVE DECIMAL NUMBER.
+    ;
+    ; OUTPUT:
+    ; AX = ENTERED NUMBER
+
+    PUSH BX
+    PUSH CX
+    PUSH DX
+
+    XOR BX,BX
+
+READNUMLOOP:
+    MOV AH,01H
+    INT 21H
+
+    CMP AL,13
+    JE READNUMDONE
+
+    CMP AL,'0'
+    JB READNUMLOOP
+
+    CMP AL,'9'
+    JA READNUMLOOP
+
+    SUB AL,'0'
+
+    XOR AH,AH
+    MOV CX,AX
+
+    MOV AX,BX
+    MOV DX,10
+    MUL DX
+
+    ADD AX,CX
+    MOV BX,AX
+
+    JMP READNUMLOOP
+
+READNUMDONE:
+    MOV AX,BX
+
+    POP DX
+    POP CX
+    POP BX
     RET
+READNUM ENDP
 
-key_down:
+NEWLINE PROC NEAR
+    ; SAVING PREV REGISTERS TO JUMP BACK INTO
+    PUSH AX
+    PUSH DX
+
+    ; PRINT INSTRUCTION
+    MOV AH, 02H
+
+    ; CARRIAGE RETURN
+    MOV DL, 13
+    INT 21H
+
+    ; LINE FEED
+    MOV DL,10
+    INT 21H
+
+    ; RETURN VALUES BACK
+    POP DX
+    POP AX
+    RET
+NEWLINE ENDP
+
+
+CLEARSCREEN PROC NEAR
+
+    ; SAVING PREV REGISTERS TO JUMP BACK INTO
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+
+
+    MOV AX,0600H
+    MOV BH,07H
+    MOV CX,0000H
+    MOV DX,184FH
+    INT 10H
+
+    MOV AH,02H
+    MOV BH,00H
+    MOV DX,0000H
+    INT 10H
+
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+CLEARSCREEN ENDP
+
+
+EXITPROGRAM PROC NEAR
+    MOV AX,4C00H
+    INT 21H
+EXITPROGRAM ENDP
+
+; =================================================================
+; THE HELPERS BELOW ARE SHARED BY EVERY OTHER .ASM FILE IN THIS
+; PROJECT - PRINTING TEXT/CHARACTERS/NUMBERS, COPYING OR CLEARING A
+; '$'-TERMINATED STRING, COMPARING TWO OF THEM, AND CHECKING WHAT
+; KIND OF CHARACTERS A TYPED-IN STRING CONTAINS. NOTHING HERE IS
+; SPECIFIC TO LOGIN, CART, MENU OR CHECKOUT - THAT'S WHY THEY LIVE
+; HERE INSTEAD OF BEING COPIED INTO EACH FILE THAT NEEDS THEM.
+; =================================================================
+
+PRINT_STRING PROC NEAR
+    ; PRINTS A '$'-TERMINATED STRING.
+    ; INPUT: DS:DX = ADDRESS OF THE STRING
+    PUSH AX
+    MOV AH, 09H
+    INT 21H
+    POP AX
+    RET
+PRINT_STRING ENDP
+
+
+PRINT_CHAR PROC NEAR
+    ; PRINTS ONE CHARACTER.
+    ; INPUT: DL = THE CHARACTER
+    PUSH AX
+    MOV AH, 02H
+    INT 21H
+    POP AX
+    RET
+PRINT_CHAR ENDP
+
+
+PRINT_NUM PROC NEAR
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+
+    XOR CX, CX                 ; Digit counter = 0
+    MOV BX, 10
+
+CONVERT_LOOP:
+    XOR DX, DX
+    DIV BX                     ; Divide AX by 10 (Remainder in DX)
+    PUSH DX                    ; Push remainder onto stack
+    INC CX
+    CMP AX, 0
+    JNE CONVERT_LOOP
+
+PRINT_LOOP:
+    POP DX
+    ADD DL, '0'                ; Convert digit to ASCII
+    MOV AH, 02H
+    INT 21H
+    LOOP PRINT_LOOP
+
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+PRINT_NUM ENDP
+
+
+COPY_STRING PROC
+CS_LOOP:
+    MOV AL, [SI]
+    MOV [DI], AL
+    INC SI
+    INC DI
+    CMP AL, '$'
+    JE  CS_DONE
+    JMP CS_LOOP
+CS_DONE:
+    RET
+COPY_STRING ENDP
+
+
+CLEAR_BUF PROC
+    XOR AL, AL
+CB_LOOP:
+    MOV [DI], AL
+    INC DI
+    LOOP CB_LOOP
+    RET
+CLEAR_BUF ENDP
+
+
+STR_COMPARE PROC
+CMP_LOOP:
+    MOV AL, [SI]
+    MOV DL, [DI]
+    CMP AL, DL
+    JNE CMP_NOT_EQUAL
+    CMP AL, '$'
+    JE  CMP_EQUAL
+    INC SI
+    INC DI
+    JMP CMP_LOOP
+CMP_EQUAL:
     MOV AL, 1
     RET
-
-key_enter:
-    MOV AL, 2
+CMP_NOT_EQUAL:
+    MOV AL, 0
     RET
-
-ReadArrowKey ENDP
-
-
-ReadString PROC NEAR
-    ; Input:
-    ; DS:DX = address of DOS input buffer
-    ;
-    ; Buffer:
-    ; byte 0 = maximum length
-    ; byte 1 = actual length
-    ; byte 2 onward = entered characters
-    ;
-    ; Adds '$' after the entered text.
-
-    push ax
-    push bx
-    push si
-
-    mov bx,dx
-
-    mov ah,0Ah
-    int 21h
-
-    xor ax,ax
-    mov al,[bx+1]
-
-    mov si,bx
-    add si,2
-    add si,ax
-
-    mov byte ptr [si],'$'
-
-    pop si
-    pop bx
-    pop ax
-    ret
-ReadString ENDP
+STR_COMPARE ENDP
 
 
-ReadNum PROC NEAR
-    ; Reads a positive decimal number.
-    ;
-    ; Output:
-    ; AX = entered number
+CHECK_ALPHA PROC NEAR
+    PUSH CX
+    PUSH SI
+    CMP CX, 0
+    JE  CCA_BAD
 
-    push bx
-    push cx
-    push dx
+CCA_LOOP:
+    MOV AL, [SI]
+    CMP AL, 'a'
+    JB  CCA_CHECK_UPPER
+    CMP AL, 'z'
+    JBE CCA_OK_CHAR
+    ; (falls through when AL > 'z' - not lowercase, so check uppercase next)
 
-    xor bx,bx
+CCA_CHECK_UPPER:
+    CMP AL, 'A'
+    JB  CCA_SPACE
+    CMP AL, 'Z'
+    JBE CCA_OK_CHAR
+    ; (falls through when AL > 'Z' - not a letter, so check for a space next)
 
-ReadNumLoop:
-    mov ah,01h
-    int 21h
+CCA_SPACE:
+    CMP AL, ' '
+    JE  CCA_OK_CHAR
+    JMP CCA_BAD
 
-    cmp al,13
-    je ReadNumDone
+CCA_OK_CHAR:
+    INC SI
+    LOOP CCA_LOOP
 
-    cmp al,'0'
-    jb ReadNumLoop
+    MOV AL, 1
+    JMP CCA_DONE
 
-    cmp al,'9'
-    ja ReadNumLoop
+CCA_BAD:
+    MOV AL, 0
 
-    sub al,'0'
-
-    xor ah,ah
-    mov cx,ax
-
-    mov ax,bx
-    mov dx,10
-    mul dx
-
-    add ax,cx
-    mov bx,ax
-
-    jmp ReadNumLoop
-
-ReadNumDone:
-    mov ax,bx
-
-    pop dx
-    pop cx
-    pop bx
-    ret
-ReadNum ENDP
+CCA_DONE:
+    POP SI
+    POP CX
+    RET
+CHECK_ALPHA ENDP
 
 
-NewLine PROC NEAR
-    push ax
-    push dx
+CHECK_DIGITS PROC NEAR
+    PUSH CX
+    PUSH SI
+    CMP CX, 0
+    JE  CCD_BAD
 
-    mov ah,02h
+CCD_LOOP:
+    MOV AL, [SI]
+    CMP AL, '0'
+    JB  CCD_BAD
+    CMP AL, '9'
+    JA  CCD_BAD
+    INC SI
+    LOOP CCD_LOOP
 
-    mov dl,13
-    int 21h
+    MOV AL, 1
+    JMP CCD_DONE
 
-    mov dl,10
-    int 21h
+CCD_BAD:
+    MOV AL, 0
 
-    pop dx
-    pop ax
-    ret
-NewLine ENDP
-
-
-ClearScreen PROC NEAR
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov ax,0600h
-    mov bh,07h
-    mov cx,0000h
-    mov dx,184Fh
-    int 10h
-
-    mov ah,02h
-    mov bh,00h
-    mov dx,0000h
-    int 10h
-
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-ClearScreen ENDP
-
-
-ExitProgram PROC NEAR
-    mov ax,4C00h
-    int 21h
-ExitProgram ENDP
+CCD_DONE:
+    POP SI
+    POP CX
+    RET
+CHECK_DIGITS ENDP
 
 END
