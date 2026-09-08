@@ -2,8 +2,8 @@
 
 DeliGo is a food delivery and ordering system written in x86 assembly for MS-DOS. It runs as a classic text-mode terminal app: log in (or register a new account), then order food, manage a cart, check out, and look back through your order history — all from a set of numbered menus.
 
-Repository: https://github.com/atrocria/asm_assignment
-
+Repository link: https://github.com/atrocria/asm_assignment
+ 
 ## Features
 
 - **Login / Register** — sign in with an existing account, or register a new one by choosing a username/password and one of 3 fixed delivery addresses.
