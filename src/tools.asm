@@ -30,7 +30,6 @@ PUBLIC NEWLINE          ; prints CR+LF (moves the cursor to a new line)
 PUBLIC CLEARSCREEN      ; blanks the screen, cursor back to top-left
 PUBLIC READSTRING       ; reads a whole typed line into a buffer
 PUBLIC READNUM          ; reads typed digits, returns them as a number in AX
-PUBLIC EXITPROGRAM      ; quits straight back to DOS
 PUBLIC PRINT_STRING, PRINT_CHAR, PRINT_NUM   ; the 3 ways to print something
 PUBLIC COPY_STRING, CLEAR_BUF, STR_COMPARE   ; basic '$'-string helpers
 PUBLIC CHECK_ALPHA, CHECK_DIGITS             ; input-validation helpers
@@ -249,22 +248,6 @@ CLEARSCREEN PROC NEAR
     POP AX
     RET
 CLEARSCREEN ENDP
-
-
-;-------------------------------------------------------------
-; EXITPROGRAM  -  IMMEDIATELY QUITS BACK TO DOS. (NOT CURRENTLY
-; CALLED FROM ANYWHERE ELSE IN THIS PROJECT - MAIN.ASM'S OPT_QUIT
-; DOES THE SAME THING DIRECTLY INSTEAD - BUT IT'S KEPT HERE AS A
-; READY-TO-USE HELPER.)
-;-------------------------------------------------------------
-EXITPROGRAM PROC NEAR
-    MOV AX,4C00H                ; AH=4CH IS DOS'S "TERMINATE PROGRAM"
-                                 ; FUNCTION; AL (THE LOW BYTE, HERE 00H) IS
-                                 ; THE EXIT CODE OTHER PROGRAMS/BATCH FILES
-                                 ; CAN CHECK - 00H CONVENTIONALLY MEANS
-                                 ; "FINISHED WITH NO ERROR"
-    INT 21H
-EXITPROGRAM ENDP
 
 ; =================================================================
 ; THE HELPERS BELOW ARE SHARED BY EVERY OTHER .ASM FILE IN THIS
