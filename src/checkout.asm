@@ -1,6 +1,47 @@
-.MODEL SMALL
+;===============================================================
+; QUICK REFERENCE - INT 21H FUNCTIONS AND INSTRUCTIONS USED HERE
+; (FOR VIVA/INTERVIEW REVIEW - NOT PART OF THE ORIGINAL PROGRAM)
+;===============================================================
+;
+; --- DOS INTERRUPT (INT 21H) FUNCTIONS, SELECTED VIA AH ---
+;   AH=01H  READ ONE KEY, WITH ECHO       - waits for a keypress, prints
+;                                           it, returns it in AL
+;                                           (used: payment menu choice)
+;   AH=02H  PRINT ONE CHARACTER           - prints whatever is in DL
+;                                           (used inside NEWLINE/PRINT_NUM,
+;                                           TOOLS.ASM)
+;   AH=07H  READ ONE KEY, NO ECHO         - waits for a keypress but does
+;                                           NOT print it
+;                                           (used: CO_WAIT_KEY, "press
+;                                           any key to continue")
+;   AH=09H  PRINT STRING                  - prints DS:DX until it hits
+;                                           '$' (why every message here
+;                                           ends in '$', not a null byte)
+;                                           (used inside PRINT_STRING,
+;                                           TOOLS.ASM)
+;   AH=0AH  BUFFERED KEYBOARD INPUT       - reads a whole line into a
+;                                           buffer until ENTER; buffer
+;                                           byte 1 = count, byte 2+ =
+;                                           the raw characters typed
+;                                           (used inside READSTRING,
+;                                           TOOLS.ASM)
+;
+; --- CORE INSTRUCTIONS USED IN THIS FILE ---
+;   JE/JNE     jump if the last CMP found the two values equal / not
+;              equal (i.e. zero flag set / clear)
+;   JB         jump if below - the last CMP found the first value
+;              LESS than the second, treating both as UNSIGNED numbers
+;   JL/JGE     jump if less / greater-or-equal - like JB, but treating
+;              both values as SIGNED numbers
+;   JMP        unconditional jump - always taken, no CMP needed
+;   XOR        bitwise XOR - XOR reg,reg (e.g. XOR CH,CH) is the
+;              standard cheap way to zero a register, equivalent to
+;              MOV reg,0
+;   AND        bitwise AND - used elsewhere in this project to mask
+;              off bits (e.g. forcing a letter to uppercase)
+;===============================================================
 
-;! DISPLAYING DISCOUNTED OPTION DUE TO PROXIMITY TAKEN FROM INSIDE CART.ASM
+.MODEL SMALL
 
 ; CHECKOUT.ASM
 ; TURNS THE CART FROM CART.ASM INTO A SAVED ORDER, AND LETS THE
@@ -30,6 +71,15 @@ EXTRN DISCOUNT_TOTAL:WORD           ; FROM CART.ASM - RM SAVED VIA THE PROXIMITY
 EXTRN PRINT_NUM:NEAR                ; FROM TOOLS.ASM - SHARED NUMBER-PRINTING HELPER
 EXTRN PRINT_STRING:NEAR             ; FROM TOOLS.ASM - SHARED STRING-PRINTING HELPER
 EXTRN CHECK_ALPHA:NEAR, CHECK_DIGITS:NEAR   ; FROM TOOLS.ASM
+                                             ; CHECK_DIGITS: checks that CX
+                                             ; characters starting at DS:SI
+                                             ; are all '0'-'9'; AL=1 if so
+                                             ; (and CX>0), AL=0 otherwise
+                                             ; CHECK_ALPHA: same idea but
+                                             ; checks A-Z/a-z or spaces
+                                             ; instead of digits. Both PROCs
+                                             ; actually live in TOOLS.ASM -
+                                             ; this file only ever CALLs them
 
 ; FROM LOGIN.ASM
 EXTRN CURRENT_ADDR:BYTE             ; THE LOGGED-IN ACCOUNT'S SAVED DELIVERY ADDRESS
@@ -40,7 +90,7 @@ EXTRN READNUM:NEAR, NEWLINE:NEAR, READSTRING:NEAR
 .DATA
     ; C++ EQUIVALENT: #DEFINE MAX_HISTORY 10
     MAX_HISTORY      EQU 10          ; NUMBER OF PAST ORDERS TO KEEP
-    TAX_PERCENTAGE   EQU 6           ; FLAT TAX RATE APPLIED TO THE SUBTOTAL
+    TAX_PERCENTAGE   EQU 6           ; FLAT % TAX RATE APPLIED TO THE SUBTOTAL
 
     ; ---------- INPUT LENGTH LIMITS (ALSO USED TO VALIDATE INPUT) ----------
     NAME_MAXLEN      EQU 30          ; MAX CHARACTERS FOR CARDHOLDER NAME
@@ -89,15 +139,10 @@ EXTRN READNUM:NEAR, NEWLINE:NEAR, READSTRING:NEAR
     INVALID_PAYMENT_MSG DB 0DH,0AH,'INVALID CHOICE, TRY AGAIN.',0DH,0AH,'$'
 
     CASH_PROMPT         DB 0DH,0AH,'ENTER CASH AMOUNT FOR COD (RM): $'
-    ; NO LEADING 0DH,0AH HERE - CO_PAY_CASH ALREADY CALLS NEWLINE RIGHT
-    ; BEFORE THIS IS PRINTED, SO THE CURSOR IS ALREADY ON A FRESH LINE.
-    ; ADDING ANOTHER CR,LF HERE WOULD JUST INSERT A BLANK LINE.
+
     CHANGE_LABEL        DB 'CHANGE: RM $'
     INSUFFICIENT_MSG    DB 0DH,0AH,'THAT IS NOT ENOUGH CASH - CHECKOUT CANCELLED.',0DH,0AH,'$'
-    ; NO LEADING 0DH,0AH - CO_READ_CVV ALREADY CALLED NEWLINE. NO
-    ; TRAILING 0DH,0AH EITHER - DELIVERY_TO_MSG BELOW ADDS THE ONE BLANK
-    ; LINE BEFORE "DELIVERING TO:" ITSELF, THE SAME WAY FOR BOTH COD AND
-    ; CARD PAYMENTS (SEE ITS COMMENT).
+
     CARD_APPROVED_MSG   DB 'CARD PAYMENT APPROVED.$'
 
     CASH_TENDERED       DW 0             ; CASH THE CUSTOMER HANDED OVER
@@ -106,36 +151,24 @@ EXTRN READNUM:NEAR, NEWLINE:NEAR, READSTRING:NEAR
     ; ---------- CARD DETAILS (ASKED FOR CARD PAYMENTS ONLY) ----------
     NAME_PROMPT          DB 0DH,0AH,'ENTER CARDHOLDER NAME: $'
     INVALID_NAME_MSG     DB 0DH,0AH,'INVALID NAME - LETTERS AND SPACES ONLY, TRY AGAIN.',0DH,0AH,'$'
-    ; NO LEADING 0DH,0AH - WHATEVER RAN JUST BEFORE THIS (CO_READ_NAME,
-    ; OR THE INVALID-CARD-NUMBER RETRY MESSAGE) ALREADY LEFT THE CURSOR
-    ; ON A FRESH LINE.
+
     CARD_NUMBER_PROMPT   DB 'ENTER CARD NUMBER (12-16 DIGITS): $'
     INVALID_CARD_MSG     DB 0DH,0AH,'INVALID CARD NUMBER - DIGITS ONLY, 12-16 OF THEM, TRY AGAIN.',0DH,0AH,'$'
-    ; NO LEADING 0DH,0AH - SAME REASON AS CARD_NUMBER_PROMPT ABOVE.
+
     CVV_PROMPT           DB 'ENTER THE 3-DIGIT CVV (ON THE BACK OF THE CARD): $'
     INVALID_CVV_MSG      DB 0DH,0AH,'INVALID CVV - MUST BE EXACTLY 3 DIGITS, TRY AGAIN.',0DH,0AH,'$'
 
-    ; DOS BUFFERED-INPUT FORMAT: BYTE0 = MAX CHARS, BYTE1 = ACTUAL CHARS
-    ; TYPED (FILLED IN BY READSTRING), BYTE2.. = THE CHARACTERS.
-    ; DOS NEEDS ROOM FOR THE CR TOO, SO THE MAX BYTE IS MAXLEN+1
+    ; DOS BUFFERED-INPUT FORMAT: BYTE0 = MAX CHARS, BYTE1 = TOTAL_TYPED, BYTE3-MAXLEN = RESERVED FOR USER INPUT
     NAME_BUF          DB NAME_MAXLEN+1, 0, NAME_MAXLEN+2 DUP(0)
     CARD_NUMBER_BUF   DB CARD_MAXLEN+1, 0, CARD_MAXLEN+2 DUP(0)
     CVV_BUF           DB CVV_MAXLEN+1, 0, CVV_MAXLEN+2 DUP(0)
 
-    ; ---------- DELIVERY (SHOWN AFTER EITHER PAYMENT METHOD) ----------
-    ; No longer asked for - it's just wherever the logged-in account
-    ; has on file (CURRENT_ADDR, from login.asm).
-    ; DOUBLE 0DH,0AH ON PURPOSE: THE FIRST ONE ENDS WHATEVER LINE PAYMENT
-    ; LEFT US ON (EITHER "CHANGE: RM.." WITH NO NEWLINE YET, OR "CARD
-    ; PAYMENT APPROVED." WITH NO NEWLINE YET), THE SECOND ONE ADDS ONE
-    ; BLANK LINE AS A SECTION BREAK BEFORE "DELIVERING TO:". SAME RESULT
-    ; NO MATTER WHICH PAYMENT METHOD WAS USED.
     DELIVERY_TO_MSG         DB 0DH,0AH,0DH,0AH,'DELIVERING TO: $'
     DELIVERY_ESTIMATE_MSG  DB 0DH,0AH,'ESTIMATION OF DELIVERY: 30MIN',0DH,0AH,'$'
 
     ; ---------- ORDER HISTORY STORAGE ----------
     ; SLOT I (0 .. HISTORY_COUNT-1) HOLDS ONE PAST CHECKOUT
-    ; ARRAY TYPE IN ASM, 
+    ; ARRAY TYPE IN ASM,
     HIST_BURGER   DB MAX_HISTORY DUP(0)
     HIST_NASI     DB MAX_HISTORY DUP(0)
     HIST_RICE     DB MAX_HISTORY DUP(0)
@@ -167,12 +200,17 @@ EXTRN CLEARSCREEN:NEAR
 ; =============================================================
 CHECKOUTMODULE PROC NEAR
 
-    CMP WORD PTR TOTAL_PRICE, 0
-    JNE CO_SHOW_RECEIPT
+    ; PTR is just a type cast telling dos to treat var as 2 byte
+    CMP WORD PTR TOTAL_PRICE, 0  ; is the cart's running total still zero
+                                  ; (nothing in the cart)?
+    JNE CO_SHOW_RECEIPT          ; total isn't zero -> there's something to
+                                  ; check out -> jump ahead to CO_SHOW_RECEIPT
     LEA DX, EMPTY_CART_MSG
     CALL PRINT_STRING
     CALL CO_WAIT_KEY
-    RET
+    RET                           ; cart was empty - return here straight back
+                                  ; to whoever called CHECKOUTMODULE
+                                  ; (CartModule, in cart.asm)
 
 CO_SHOW_RECEIPT:
     CALL CLEARSCREEN
@@ -191,8 +229,11 @@ CO_SHOW_RECEIPT:
     MOV AX, ORDER_SUBTOTAL
     CALL PRINT_NUM
 
-    CMP WORD PTR DISCOUNT_TOTAL, 0
-    JE  CO_NO_DISCOUNT_LINE
+    CMP WORD PTR DISCOUNT_TOTAL, 0  ; was any proximity discount actually
+                                     ; applied to this order?
+    JE  CO_NO_DISCOUNT_LINE         ; DISCOUNT_TOTAL is 0 (zero flag set) ->
+                                     ; nothing was saved -> skip this line
+                                     ; entirely
     LEA DX, DISCOUNT_LABEL
     CALL PRINT_STRING
     MOV AX, DISCOUNT_TOTAL
@@ -211,12 +252,16 @@ CO_NO_DISCOUNT_LINE:
 
     CALL CO_TAKE_PAYMENT         ; ASKS COD/CARD, SHOWS CHANGE IF PAYING COD
     CMP AL, 1                    ; AL = 1 IF PAYMENT WENT THROUGH, 0 IF NOT ENOUGH CASH
-    JE  CO_SHOW_DELIVERY
+    JE  CO_SHOW_DELIVERY         ; AL was 1 -> payment succeeded -> jump ahead;
+                                  ; otherwise fall through to the "not enough
+                                  ; cash" branch right below
 
     LEA DX, INSUFFICIENT_MSG
     CALL PRINT_STRING
     CALL CO_WAIT_KEY
-    RET
+    RET                           ; payment failed - return here straight back
+                                  ; to the caller (CartModule); the cart is
+                                  ; left untouched so checkout can be retried
 
 CO_SHOW_DELIVERY:                 ; PAYMENT WENT THROUGH - SHOW WHERE IT'S GOING
     LEA DX, DELIVERY_TO_MSG
@@ -229,12 +274,17 @@ CO_SHOW_DELIVERY:                 ; PAYMENT WENT THROUGH - SHOW WHERE IT'S GOING
 
 CO_SAVE_ORDER:
     MOV AX, HISTORY_COUNT
-    CMP AX, MAX_HISTORY
-    JL  CO_STORE
+    CMP AX, MAX_HISTORY           ; is there still a free slot left in the
+                                   ; history arrays (count < MAX_HISTORY)?
+    JL  CO_STORE                  ; count is (signed) less than MAX_HISTORY ->
+                                   ; there's room -> jump to CO_STORE and save
+                                   ; it; otherwise fall through and skip saving
 
     LEA DX, HISTORY_FULL_MSG     ; HISTORY FULL - STILL CHECKOUT, JUST SKIP SAVING IT
     CALL PRINT_STRING
-    JMP CO_CLEAR_CART
+    JMP CO_CLEAR_CART             ; unconditionally skip over CO_STORE (no room
+                                   ; to save this order) straight to
+                                   ; CO_CLEAR_CART
 
 CO_STORE:
     ; BX = WHICH HISTORY SLOT (0, 1, 2, ...) THIS ORDER GOES INTO.
@@ -267,13 +317,18 @@ CO_STORE:
     ; ITEM COUNTS ABOVE, SO SLOT NUMBER 2 STARTS AT BYTE 4, NOT BYTE
     ; 2. "SHL DI, 1" IS JUST A FAST WAY OF WRITING "DI = DI * 2".
     MOV DI, BX
-    SHL DI, 1                    ; HIST_TOTAL HOLDS WORDS, SO INDEX*2
+    SHL DI, 1                    ; DI = DI * 2 in one instruction - shifting
+                                  ; left by 1 bit doubles the value (same
+                                  ; trick as multiplying by 2 in decimal by
+                                  ; adding a 0), needed because HIST_TOTAL
+                                  ; holds words, so index*2
     LEA SI, HIST_TOTAL
     ADD SI, DI
     MOV AX, ORDER_DUE            ; SAVE WHAT WAS ACTUALLY CHARGED (TAX INCLUDED)
     MOV [SI], AX
 
-    INC HISTORY_COUNT
+    INC HISTORY_COUNT            ; one more order saved - bump the count of
+                                  ; used history slots by 1
 
 CO_CLEAR_CART:
     MOV QTY_BURGER, 0
@@ -286,7 +341,9 @@ CO_CLEAR_CART:
     LEA DX, SUCCESS_MSG
     CALL PRINT_STRING
     CALL CO_WAIT_KEY
-    RET
+    RET                           ; order placed - return here all the way
+                                  ; back to the caller (CartModule), which
+                                  ; then returns to the main menu
 CHECKOUTMODULE ENDP
 
 
@@ -302,11 +359,12 @@ HISTORYMODULE PROC NEAR
     CALL PRINT_STRING
 
     MOV CX, HISTORY_COUNT
-    CMP CX, 0
-    JNE HM_LIST
+    CMP CX, 0                    ; is there at least one saved order to list?
+    JNE HM_LIST                  ; count isn't zero -> jump to HM_LIST
     LEA DX, HISTORY_EMPTY_MSG
     CALL PRINT_STRING
-    JMP HM_DONE
+    JMP HM_DONE                  ; no orders saved - unconditionally skip the
+                                  ; whole listing loop below and finish up
 
 HM_LIST:
     MOV BX, 0                    ; BX = INDEX OF THE ORDER BEING PRINTED
@@ -358,7 +416,8 @@ HM_LOOP:
     LEA DX, CO_TOTAL
     CALL PRINT_STRING
     MOV DI, BX
-    SHL DI, 1
+    SHL DI, 1                    ; DI = BX * 2 - same word-index trick as in
+                                  ; CO_STORE above
     LEA SI, HIST_TOTAL
     ADD SI, DI
     MOV AX, [SI]
@@ -368,8 +427,9 @@ HM_LOOP:
     LEA DX, SEPARATOR_MSG
     CALL PRINT_STRING
 
-    INC BX
-    CMP BX, HISTORY_COUNT
+    INC BX                        ; move on to the next history slot
+    CMP BX, HISTORY_COUNT         ; have we now printed every saved order
+                                   ; (BX == count)?
     JGE HM_TOTAL                 ; MASM CAN'T REACH HM_LOOP WITH A SHORT JL FROM
     JMP HM_LOOP                  ; HERE (LOOP BODY IS TOO LONG) - JMP HAS NO SUCH LIMIT
 
@@ -381,7 +441,8 @@ HM_TOTAL:
 
 HM_DONE:
     CALL CO_WAIT_KEY
-    RET
+    RET                           ; back to whoever called HISTORYMODULE
+                                  ; (MAIN.ASM's "3. ORDER HISTORY" option)
 HISTORYMODULE ENDP
 
 ; =============================================================
@@ -417,7 +478,8 @@ CO_PRINT_ITEMS PROC NEAR
     MOV AL, QTY_CHICKEN
     MOV AH, 0
     CALL PRINT_NUM
-    RET
+    RET                           ; back to CHECKOUTMODULE, right after its
+                                  ; "CALL CO_PRINT_ITEMS" line
 CO_PRINT_ITEMS ENDP
 
 ; --- WORKS OUT THE PRE-DISCOUNT SUBTOTAL, TAX AND TOTAL DUE.
@@ -439,8 +501,10 @@ CO_PRINT_ITEMS ENDP
 ;     (RM1 SAVED PER BURGER). SO: SUBTOTAL = 8+2 = RM10, TAX = 8*6/100
 ;     = RM0 (ROUNDS DOWN), TOTAL DUE = 8+0 = RM8. ---
 CO_CALC_TAX PROC NEAR
-    PUSH BX
-    PUSH DX
+    PUSH BX                       ; save the caller's BX and DX - this proc
+    PUSH DX                       ; uses BX as the MUL/DIV operand and DX as
+                                  ; the top half of DX:AX during MUL/DIV, so
+                                  ; both must be restored before returning
 
     MOV AX, TOTAL_PRICE
     ADD AX, DISCOUNT_TOTAL        ; AX = ORIGINAL, PRE-DISCOUNT SUBTOTAL
@@ -452,16 +516,21 @@ CO_CALC_TAX PROC NEAR
                                   ; (E.G. RM8 * 6 = 48 - "6% OF RM8" AS A
                                   ; WHOLE NUMBER BEFORE WE DIVIDE BACK DOWN)
     MOV BX, 100
-    DIV BX                       ; AX = TAX AMOUNT (48 / 100 = 0, ROUNDED DOWN)
+    DIV BX                       ; divides the 32-bit DX:AX by BX (100) - the
+                                  ; quotient (the actual tax, rounded down)
+                                  ; lands in AX, the remainder lands in DX and
+                                  ; is simply not used (E.G. 48 / 100 = 0 IN
+                                  ; AX, REMAINDER 48 IN DX, ROUNDED DOWN)
     MOV ORDER_TAX, AX
 
     MOV AX, TOTAL_PRICE
     ADD AX, ORDER_TAX
     MOV ORDER_DUE, AX
 
-    POP DX
-    POP BX
-    RET
+    POP DX                        ; restore the caller's original DX and BX,
+    POP BX                        ; in the reverse order they were pushed
+    RET                            ; back to CHECKOUTMODULE, right after its
+                                  ; "CALL CO_CALC_TAX" line
 CO_CALC_TAX ENDP
 
 ; --- ASKS COD OR CARD AND COLLECTS PAYMENT.
@@ -470,6 +539,8 @@ CO_CALC_TAX ENDP
 ;     UNTIL VALID).
 ;     RETURNS: AL = 1 IF PAYMENT WENT THROUGH, AL = 0 IF THE CASH
 ;              HANDED OVER WAS NOT ENOUGH (CHECKOUT IS CANCELLED). ---
+
+;?    WHOLE SCRIPT STARTS HERE
 CO_TAKE_PAYMENT PROC NEAR
 CO_ASK_METHOD:
     LEA DX, PAYMENT_MENU_MSG
@@ -478,14 +549,15 @@ CO_ASK_METHOD:
     MOV AH, 01H                  ; READ ONE KEY (1 OR 2)
     INT 21H
 
-    CMP AL, '1'
-    JE  CO_PAY_CASH
-    CMP AL, '2'
-    JE  CO_PAY_CARD
+    CMP AL, '1'                  ; was the key pressed the character '1'?
+    JE  CO_PAY_CASH              ; yes -> jump to CO_PAY_CASH
+    CMP AL, '2'                  ; wasn't '1' - was it '2' instead?
+    JE  CO_PAY_CARD              ; yes -> jump to CO_PAY_CARD
 
     LEA DX, INVALID_PAYMENT_MSG
     CALL PRINT_STRING
-    JMP CO_ASK_METHOD
+    JMP CO_ASK_METHOD             ; neither '1' nor '2' - unconditionally loop
+                                  ; back and ask again
 
 CO_PAY_CARD:
     CALL CO_READ_NAME             ; CARDHOLDER NAME (LETTERS/SPACES ONLY)
@@ -495,7 +567,9 @@ CO_PAY_CARD:
     LEA DX, CARD_APPROVED_MSG
     CALL PRINT_STRING
     MOV AL, 1
-    RET
+    RET                            ; back to CHECKOUTMODULE with AL=1 (success)
+                                  ; - this is the value the "CMP AL,1" right
+                                  ; after "CALL CO_TAKE_PAYMENT" there checks
 
 CO_PAY_CASH:
     LEA DX, CASH_PROMPT
@@ -504,13 +578,18 @@ CO_PAY_CASH:
     CALL NEWLINE
     MOV CASH_TENDERED, AX
 
-    CMP AX, ORDER_DUE
-    JGE CO_CASH_OK
+    CMP AX, ORDER_DUE             ; did the customer hand over at least as
+                                  ; much as ORDER_DUE?
+    JGE CO_CASH_OK                ; AX >= ORDER_DUE (signed) -> enough cash ->
+                                  ; jump to CO_CASH_OK
     MOV AL, 0                    ; NOT ENOUGH CASH
-    RET
+    RET                            ; back to CHECKOUTMODULE with AL=0 (fail) -
+                                  ; sends it down the "insufficient cash,
+                                  ; cancel checkout" path
 
 CO_CASH_OK:
-    SUB AX, ORDER_DUE
+    SUB AX, ORDER_DUE             ; AX = cash handed over minus what was owed
+                                  ; = the change to give back
     MOV CHANGE_DUE, AX
 
     LEA DX, CHANGE_LABEL
@@ -519,7 +598,7 @@ CO_CASH_OK:
     CALL PRINT_NUM
 
     MOV AL, 1
-    RET
+    RET                            ; back to CHECKOUTMODULE with AL=1 (success)
 CO_TAKE_PAYMENT ENDP
 
 ; --- ASKS FOR THE CARDHOLDER NAME AND RE-ASKS UNTIL IT IS NOT
@@ -533,18 +612,26 @@ CO_READ_NAME_AGAIN:
     CALL NEWLINE
 
     MOV CL, NAME_BUF+1           ; ACTUAL NUMBER OF CHARACTERS TYPED
-    XOR CH, CH
+    XOR CH, CH                   ; zero CH so CX holds exactly CL (0-255), not
+                                  ; CL plus whatever leftover junk was sitting
+                                  ; in CH - CHECK_ALPHA needs the real count
+                                  ; in the full CX register
     LEA SI, NAME_BUF+2
     CALL CHECK_ALPHA
-    CMP AL, 1
-    JE  CO_READ_NAME_OK
+    CMP AL, 1                    ; CHECK_ALPHA returns AL=1 only if every
+                                  ; character was a letter/space AND there was
+                                  ; at least one - was that the case?
+    JE  CO_READ_NAME_OK          ; yes -> jump to CO_READ_NAME_OK, done here
 
     LEA DX, INVALID_NAME_MSG
     CALL PRINT_STRING
-    JMP CO_READ_NAME_AGAIN
+    JMP CO_READ_NAME_AGAIN        ; invalid - unconditionally loop back and
+                                  ; re-ask
 
 CO_READ_NAME_OK:
-    RET
+    RET                            ; valid name obtained - back to whoever
+                                  ; called CO_READ_NAME (CO_TAKE_PAYMENT's
+                                  ; card branch)
 CO_READ_NAME ENDP
 
 ; --- ASKS FOR A CARD NUMBER AND RE-ASKS UNTIL IT IS CARD_MINLEN TO
@@ -558,22 +645,27 @@ CO_READ_CARDNUM_AGAIN:
     CALL NEWLINE
 
     MOV CL, CARD_NUMBER_BUF+1    ; ACTUAL NUMBER OF CHARACTERS TYPED
-    XOR CH, CH
-    CMP CX, CARD_MINLEN
-    JB  CO_CARDNUM_INVALID
+    XOR CH, CH                   ; zero CH - same reason as CO_READ_NAME above
+    CMP CX, CARD_MINLEN           ; is the number of characters typed at
+                                  ; least CARD_MINLEN (12)?
+    JB  CO_CARDNUM_INVALID        ; CX is (unsigned) below CARD_MINLEN -> too
+                                  ; short -> jump straight to the error,
+                                  ; without even checking the digits
 
     LEA SI, CARD_NUMBER_BUF+2
     CALL CHECK_DIGITS
-    CMP AL, 1
-    JE  CO_READ_CARDNUM_OK
+    CMP AL, 1                    ; did CHECK_DIGITS confirm every character
+                                  ; typed was a digit?
+    JE  CO_READ_CARDNUM_OK        ; yes -> jump to CO_READ_CARDNUM_OK, done
 
 CO_CARDNUM_INVALID:
     LEA DX, INVALID_CARD_MSG
     CALL PRINT_STRING
-    JMP CO_READ_CARDNUM_AGAIN
+    JMP CO_READ_CARDNUM_AGAIN     ; unconditionally loop back and re-ask
 
 CO_READ_CARDNUM_OK:
-    RET
+    RET                            ; valid card number obtained - back to
+                                  ; CO_TAKE_PAYMENT's card branch
 CO_READ_CARDNUM ENDP
 
 ; --- ASKS FOR THE 3-DIGIT CVV AND RE-ASKS UNTIL IT IS EXACTLY
@@ -587,36 +679,42 @@ CO_READ_CVV_AGAIN:
     CALL NEWLINE
 
     MOV CL, CVV_BUF+1            ; ACTUAL NUMBER OF CHARACTERS TYPED
-    XOR CH, CH
-    CMP CX, CVV_MAXLEN
-    JNE CO_CVV_INVALID
+    XOR CH, CH                   ; zero CH - same reason as above
+    CMP CX, CVV_MAXLEN             ; does the typed length exactly equal
+                                  ; CVV_MAXLEN (3)? Unlike the card number,
+                                  ; the CVV has no range - it must be exactly
+                                  ; 3 digits, hence JNE (not JB) below
+    JNE CO_CVV_INVALID             ; not exactly 3 -> invalid -> jump straight
+                                  ; to the error message
 
     LEA SI, CVV_BUF+2
     CALL CHECK_DIGITS
-    CMP AL, 1
-    JE  CO_READ_CVV_OK
+    CMP AL, 1                    ; did CHECK_DIGITS confirm all 3 characters
+                                  ; were digits?
+    JE  CO_READ_CVV_OK            ; yes -> jump to CO_READ_CVV_OK, done
 
 CO_CVV_INVALID:
     LEA DX, INVALID_CVV_MSG
     CALL PRINT_STRING
-    JMP CO_READ_CVV_AGAIN
+    JMP CO_READ_CVV_AGAIN         ; unconditionally loop back and re-ask
 
 CO_READ_CVV_OK:
-    RET
+    RET                            ; valid CVV obtained - back to
+                                  ; CO_TAKE_PAYMENT's card branch
 CO_READ_CVV ENDP
 
-; --- CHECKS THAT CX CHARACTERS STARTING AT DS:SI ARE ALL '0'-'9'.
-;     RETURNS AL = 1 IF SO (AND CX > 0), AL = 0 OTHERWISE. ---
-; --- CHECKS THAT CX CHARACTERS STARTING AT DS:SI ARE ALL LETTERS
-;     (A-Z, A-Z) OR SPACES. RETURNS AL = 1 IF SO (AND CX > 0),
-;     AL = 0 OTHERWISE. ---
 ; --- WAITS FOR A KEYPRESS SO THE SCREEN DOESN'T FLY BY ---
 CO_WAIT_KEY PROC NEAR
     LEA DX, PAUSE_MSG
     CALL PRINT_STRING
-    MOV AH, 07H
+    MOV AH, 07H                   ; DOS function 07H = read one key, no echo
+                                  ; (see the QUICK REFERENCE at the top of
+                                  ; this file) - the key itself is discarded,
+                                  ; this call exists purely to pause
     INT 21H
-    RET
+    RET                            ; back to whoever called CO_WAIT_KEY (used
+                                  ; throughout this file right before ITS
+                                  ; caller in turn returns)
 CO_WAIT_KEY ENDP
 
 END

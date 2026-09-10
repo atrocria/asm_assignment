@@ -73,6 +73,8 @@ CartModule PROC NEAR
     CALL PRINT_STRING
 
     ; --- Burger ---
+    ; proximity discount only in menu.asm and checkout.asm
+    ; burger rm5 x 3
     LEA DX, str_burger
     CALL PRINT_STRING
     MOV AX, PRICE_BURGER
@@ -80,7 +82,8 @@ CartModule PROC NEAR
     LEA DX, str_x
     CALL PRINT_STRING
     MOV AL, qty_burger
-    MOV AH, 0
+    MOV AH, 0                 ; clearing out ah
+
     CALL PRINT_NUM
 
     ; --- Nasi Lemak ---
@@ -91,7 +94,7 @@ CartModule PROC NEAR
     LEA DX, str_x
     CALL PRINT_STRING
     MOV AL, qty_nasi
-    MOV AH, 0
+    MOV AH, 0                  ; same widening as above
     CALL PRINT_NUM
 
     ; --- Egg Fried Rice ---
@@ -102,7 +105,7 @@ CartModule PROC NEAR
     LEA DX, str_x
     CALL PRINT_STRING
     MOV AL, qty_rice
-    MOV AH, 0
+    MOV AH, 0                  ; same widening as above
     CALL PRINT_NUM
 
     ; --- Fried Chicken ---
@@ -113,7 +116,7 @@ CartModule PROC NEAR
     LEA DX, str_x
     CALL PRINT_STRING
     MOV AL, qty_chicken
-    MOV AH, 0
+    MOV AH, 0                  ; same widening as above
     CALL PRINT_NUM
 
     ; --- Display Total Price ---
@@ -127,24 +130,36 @@ CartModule PROC NEAR
     LEA DX, checkout_prompt
     CALL PRINT_STRING
 
-    MOV AH, 01H                ; read one key (Y/N)
-    INT 21H
-    AND AL, 0DFH                ; uppercase, so 'y' and 'Y' both work
-    CMP AL, 'Y'
-    JE  GO_CHECKOUT
-    JMP SKIP_CHECKOUT
+    MOV AH, 01H                ; DOS function 01H = read one key, with echo
+    INT 21H                    ; AL = the key just pressed (e.g. 'y' or 'N')
+    AND AL, 0DFH                ; ANDing with 1101_1111 clears bit 5. Bit 5 is
+                                 ; the ONLY bit that differs between an
+                                 ; uppercase and lowercase ASCII letter (e.g.
+                                 ; 'y'=79H, 'Y'=59H), so this forces whatever
+                                 ; letter was typed to uppercase without
+                                 ; touching digits or symbols
+    CMP AL, 'Y'                 ; compare the now-uppercase key to 'Y' - this
+                                 ; sets the zero flag if AL == 'Y'
+    JE  GO_CHECKOUT             ; zero flag set (it WAS 'Y') -> jump ahead to
+                                 ; GO_CHECKOUT
+    JMP SKIP_CHECKOUT           ; anything else ('N', or any other key) falls
+                                 ; through to here and jumps to SKIP_CHECKOUT
 
 GO_CHECKOUT:
     CALL CheckoutModule         ; shows a receipt, saves to history, empties the cart
-    RET
+    RET                         ; CheckoutModule has already returned to us by
+                                 ; this point - this RET sends control back to
+                                 ; whoever called CartModule (menu.asm)
 
 SKIP_CHECKOUT:
     ; Pause
     LEA DX, pause_msg
     CALL PRINT_STRING
-    MOV AH, 07H
+    MOV AH, 07H                 ; DOS function 07H = read one key, NO echo -
+                                 ; used purely to pause, the key itself is
+                                 ; never looked at
     INT 21H
-    RET
+    RET                         ; back to whoever called CartModule (menu.asm)
 CartModule ENDP
 
 ; --- Prints one cart line's price. If this session doesn't qualify
@@ -153,12 +168,15 @@ CartModule ENDP
 ; IN: AX = base price for this item
 PRINT_ITEM_PRICE PROC NEAR
     PUSH AX                      ; remember the original (undiscounted) price
+                                  ; on the stack - CALC_PRICE is about to
+                                  ; reuse AX for its own result
     CALL CALC_PRICE               ; AX = price to charge, BX = amount saved
-    CMP BX, 0
-    JE  PIP_PLAIN
+    CMP BX, 0                     ; did CALC_PRICE actually save anything?
+    JE  PIP_PLAIN                 ; BX == 0 (zero flag set) -> no discount ->
+                                   ; jump to PIP_PLAIN and print the plain price
 
     MOV CX, AX                    ; CX = price to charge (save before AX is reused)
-    POP AX                         ; AX = original price
+    POP AX                         ; undo the PUSH AX above - AX = original price
     LEA DX, DASH_LABEL
     CALL PRINT_STRING
     LEA DX, RM_LABEL
@@ -172,14 +190,17 @@ PRINT_ITEM_PRICE PROC NEAR
     CALL PRINT_STRING
     MOV AX, CX                      ; AX = price to charge
     CALL PRINT_NUM
-    RET
+    RET                              ; back to CartModule, right after whichever
+                                      ; "CALL PRINT_ITEM_PRICE" line got us here
 
 PIP_PLAIN:
-    POP AX                          ; AX = original price (nothing was saved)
+    POP AX                          ; undo the PUSH AX above - AX = original
+                                     ; price (nothing was saved, so it's also
+                                     ; the price to charge)
     LEA DX, RM_LABEL
     CALL PRINT_STRING
     CALL PRINT_NUM
-    RET
+    RET                              ; back to CartModule, same as above
 PRINT_ITEM_PRICE ENDP
 
 ; --- Works out the proximity discount for one item.
@@ -201,38 +222,46 @@ PRINT_ITEM_PRICE ENDP
 ;     4 prices work out, not a rule - which is why each one still
 ;     gets its own line below instead of one flat "-RM1".) ---
 CALC_PRICE PROC NEAR
-    CMP CURRENT_DISCOUNT, 1
-    JNE CALC_PRICE_NONE
+    CMP CURRENT_DISCOUNT, 1      ; is this session flagged (by login.asm) as
+                                  ; eligible for the 10% discount?
+    JNE CALC_PRICE_NONE          ; flag isn't 1 (zero flag clear) -> not
+                                  ; eligible -> skip straight to "no discount"
 
-    CMP AX, 5                   ; BURGER
-    JNE CP_NOT_BURGER
+    CMP AX, 5                   ; is the incoming price RM5 (a burger)?
+    JNE CP_NOT_BURGER           ; no -> jump past the burger case
     MOV AX, 4                   ; price to charge
     MOV BX, 1                   ; amount saved
-    RET
+    RET                          ; back to caller (PRINT_ITEM_PRICE) with the
+                                 ; discounted price/savings already set
 CP_NOT_BURGER:
-    CMP AX, 14                  ; NASI LEMAK
-    JNE CP_NOT_NASI
+    CMP AX, 14                  ; is it RM14 (nasi lemak)?
+    JNE CP_NOT_NASI             ; no -> jump past this case too
     MOV AX, 13
     MOV BX, 1
-    RET
+    RET                          ; back to caller, same as above
 CP_NOT_NASI:
-    CMP AX, 7                   ; EGG FRIED RICE
-    JNE CP_NOT_RICE
+    CMP AX, 7                   ; is it RM7 (egg fried rice)?
+    JNE CP_NOT_RICE             ; no -> jump past this case too
     MOV AX, 6
     MOV BX, 1
-    RET
+    RET                          ; back to caller, same as above
 CP_NOT_RICE:
-    CMP AX, 6                   ; FRIED CHICKEN
+    CMP AX, 6                   ; is it RM6 (fried chicken)?
     JNE CALC_PRICE_NONE         ; not one of our 4 menu prices - no discount
     MOV AX, 5
     MOV BX, 1
-    RET
+    RET                          ; back to caller, same as above
 
 CALC_PRICE_NONE:
-    XOR BX, BX
-    RET
+    XOR BX, BX                   ; BX = 0 - the "amount saved" output, so this
+                                  ; says nothing was saved. XOR-ing a register
+                                  ; with itself is just a cheap way to zero it
+                                  ; (functionally the same as MOV BX,0).
+                                  ; AX is left untouched here, so it still
+                                  ; holds whatever price was passed in - that's
+                                  ; correct, since "no discount" means charge
+                                  ; the full price
+    RET                           ; back to caller (PRINT_ITEM_PRICE)
 CALC_PRICE ENDP
 
-; --- Routine to print 0-9 digits ---
-; --- Routine to print multi-digit 16-bit numbers (AX) ---
 END
